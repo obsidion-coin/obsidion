@@ -1,0 +1,26 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Chain data and wallets — NEVER commit these
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+*.wallet
+wallet.json
+*.key
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

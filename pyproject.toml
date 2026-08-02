@@ -1,0 +1,27 @@
+[project]
+name = "obsidion"
+version = "0.1.0"
+description = "Obsidion (OBSD) — a CPU-mineable, Bitcoin-style proof-of-work cryptocurrency"
+requires-python = ">=3.11"
+dependencies = [
+    "ecdsa>=0.19",
+    "flask>=3.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+obsidion-node = "obsidion.node:main"
+obsidion-cli = "obsidion.cli:main"
+obsidion-explorer = "explorer.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["obsidion*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
