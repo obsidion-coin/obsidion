@@ -33,6 +33,8 @@ import hmac
 import json
 import os
 import secrets
+import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,6 +51,12 @@ DUST = 1_000
 DEFAULT_FEE_RATE = 10
 
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
+
+
+def _associated_data(network: str) -> bytes:
+    """Envelope fields that are stored in the clear but must still be
+    authenticated, so they cannot be edited without invalidating the tag."""
+    return json.dumps({"coin": "Obsidion", "network": network}, sort_keys=True).encode()
 
 
 class WalletError(Exception):
@@ -95,7 +103,7 @@ def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
     return b"".join(blocks)[:length]
 
 
-def _encrypt(password: str, plaintext: bytes) -> dict:
+def _encrypt(password: str, plaintext: bytes, associated: bytes = b"") -> dict:
     salt = secrets.token_bytes(16)
     nonce = secrets.token_bytes(16)
     cipher_key, mac_key = _derive_keys(password, salt)
@@ -103,7 +111,7 @@ def _encrypt(password: str, plaintext: bytes) -> dict:
     ciphertext = bytes(
         a ^ b for a, b in zip(plaintext, _keystream(cipher_key, nonce, len(plaintext)))
     )
-    tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+    tag = hmac.new(mac_key, nonce + ciphertext + associated, hashlib.sha256).digest()
     return {
         "kdf": "scrypt",
         "salt": salt.hex(),
@@ -113,7 +121,7 @@ def _encrypt(password: str, plaintext: bytes) -> dict:
     }
 
 
-def _decrypt(password: str, blob: dict) -> bytes:
+def _decrypt(password: str, blob: dict, associated: bytes = b"") -> bytes:
     try:
         salt = bytes.fromhex(blob["salt"])
         nonce = bytes.fromhex(blob["nonce"])
@@ -123,8 +131,14 @@ def _decrypt(password: str, blob: dict) -> bytes:
         raise WalletError(f"wallet file is malformed: {exc}") from exc
 
     cipher_key, mac_key = _derive_keys(password, salt)
-    expected = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+    expected = hmac.new(
+        mac_key, nonce + ciphertext + associated, hashlib.sha256
+    ).digest()
     # The tag is verified before a single byte is decrypted, in constant time.
+    # `associated` covers the plaintext envelope fields — chiefly the network
+    # name, which decides how addresses are derived. Leaving it unauthenticated
+    # let anyone flip a wallet from testnet to mainnet with a text editor, and
+    # the node would follow along.
     if not hmac.compare_digest(tag, expected):
         raise WalletError("wrong password (or the wallet file is corrupted)")
 
@@ -159,6 +173,11 @@ class Wallet:
         self._password = password
         self._keys: dict[bytes, tuple[bytes, bytes]] = {}  # pkh -> (priv, pub)
         self._order: list[bytes] = []  # pkhs, oldest first
+        #: Guards key creation and the save that persists it. The RPC server is
+        #: threaded, so two clients can call getnewaddress at the same instant;
+        #: without this the second save overwrote the first, discarding a key
+        #: whose address had already been handed out.
+        self._lock = threading.RLock()
         for private_key in private_keys:
             self._register(private_key)
         #: Outpoints promised to not-yet-confirmed transactions.
@@ -195,38 +214,85 @@ class Wallet:
         except json.JSONDecodeError as exc:
             raise WalletError(f"wallet file is not valid JSON: {exc}") from exc
 
-        params = get_network(envelope.get("network", ""))
-        plaintext = _decrypt(password, envelope.get("crypto", {}))
+        network = envelope.get("network", "")
+        params = get_network(network)
+        plaintext = _decrypt(
+            password, envelope.get("crypto", {}), _associated_data(network)
+        )
         keys = [bytes.fromhex(k) for k in json.loads(plaintext)["keys"]]
         return cls(params, keys, path, password)
 
     def save(self) -> None:
+        """Persist the keys, durably.
+
+        Three properties this has to hold, because the file may be the only
+        copy of money that exists:
+
+        * **Atomic.** Written to a temporary file and renamed into place, so a
+          crash mid-write leaves the previous wallet intact rather than a
+          half-file.
+        * **Durable.** fsynced before the rename, and the directory fsynced
+          after. Without this the rename can reach disk while the contents
+          have not, and a power cut leaves an empty wallet where the keys were.
+        * **Concurrency-safe.** The temporary file carries a unique name, so
+          two simultaneous saves cannot write over each other's scratch file.
+        """
         if self.path is None or self._password is None:
             raise WalletError("wallet has no file path to save to")
 
-        plaintext = json.dumps(
-            {"keys": [self._keys[pkh][0].hex() for pkh in self._order]}
-        ).encode()
-        envelope = {
-            "coin": "Obsidion",
-            "network": self.params.name,
-            "crypto": _encrypt(self._password, plaintext),
-        }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Write-then-rename so a crash mid-write can never destroy the only
-        # copy of the keys.
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(envelope, indent=2))
-        os.replace(temporary, self.path)
+        with self._lock:
+            plaintext = json.dumps(
+                {"keys": [self._keys[pkh][0].hex() for pkh in self._order]}
+            ).encode()
+            envelope = {
+                "coin": "Obsidion",
+                "network": self.params.name,
+                "crypto": _encrypt(
+                    self._password, plaintext, _associated_data(self.params.name)
+                ),
+            }
+
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            handle, temporary = tempfile.mkstemp(
+                dir=str(self.path.parent), prefix=f"{self.path.name}.", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(handle, "w") as stream:
+                    stream.write(json.dumps(envelope, indent=2))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self.path)
+            except BaseException:
+                Path(temporary).unlink(missing_ok=True)
+                raise
+
+            # Persist the rename itself. Not available on Windows, where
+            # os.replace is already atomic on NTFS.
+            try:
+                directory = os.open(str(self.path.parent), os.O_RDONLY)
+            except (OSError, AttributeError):
+                return
+            try:
+                os.fsync(directory)
+            except OSError:
+                pass
+            finally:
+                os.close(directory)
 
     # -------------------------------------------------------------- addresses
 
     def new_address(self) -> str:
-        """Generate a key, persist it, and return its address."""
-        pubkey_hash = self._register(crypto.generate_private_key())
-        if self.path is not None:
-            self.save()
-        return crypto.pubkey_hash_to_address(pubkey_hash, self.params.bech32_hrp)
+        """Generate a key, persist it, and return its address.
+
+        Key creation and the save that records it happen under one lock. An
+        address must never be returned to a caller before the key that unlocks
+        it is safely on disk — anything sent to it would be unspendable.
+        """
+        with self._lock:
+            pubkey_hash = self._register(crypto.generate_private_key())
+            if self.path is not None:
+                self.save()
+            return crypto.pubkey_hash_to_address(pubkey_hash, self.params.bech32_hrp)
 
     def addresses(self) -> list[str]:
         return [

@@ -72,6 +72,15 @@ class NetworkParams:
     """Easiest permitted target, in compact 'bits' form. Difficulty may never
     fall below this, and the genesis block is mined at exactly this value."""
 
+    pow_algorithm: str
+    """Name of the mining hash, from `crypto.POW_ALGORITHMS`.
+
+    'scrypt-2mb' is the real one: memory-hard, so a hashing core needs two
+    megabytes of its own RAM and custom silicon gains roughly ten times over a
+    CPU instead of a hundred million. 'sha256d' is kept for regtest, where
+    thousands of blocks are mined in the test suite and the memory-hard cost
+    would turn seconds into hours."""
+
     # Safety rules
     coinbase_maturity: int
     """Blocks a mining reward must age before it can be spent. Protects against
@@ -85,13 +94,30 @@ class NetworkParams:
     Stops a miner lying about time to force an easier difficulty."""
 
     max_future_block_time: int
-    """Seconds a block timestamp may run ahead of local clock before rejection."""
+    """Seconds a block timestamp may run ahead of local clock before rejection.
+
+    Must stay small relative to `retarget_interval * target_block_time`. The
+    retarget measures how long the last period actually took using raw
+    timestamps, so a miner allowed to post-date a boundary block by a large
+    fraction of that window can inflate the measured span and pull the next
+    difficulty down. Keeping the allowance to a few block times bounds the
+    distortion to noise."""
 
     # Genesis
     genesis_timestamp: int
     genesis_message: bytes
     """Embedded in the genesis coinbase, as Bitcoin's carries a newspaper
     headline. Proves the chain was not started earlier than this date."""
+
+    genesis_nonce: int | None = None
+    """The winning nonce for this network's genesis block, if already found.
+
+    Left as None for a brand-new network, in which case genesis is mined on
+    first use. Filled in afterwards so start-up verifies with a single hash
+    instead of repeating the search — which under a memory-hard algorithm
+    costs tens of thousands of expensive hashes every time a node boots.
+    `tests/test_genesis.py` re-derives each value from scratch, so a wrong
+    entry here fails the suite rather than shipping."""
 
     @property
     def max_supply(self) -> int:
@@ -112,17 +138,19 @@ MAINNET = NetworkParams(
     default_port=9444,
     default_rpc_port=9445,
     initial_subsidy=50 * COIN,
-    halving_interval=210_000,          # ~146 days at 60s blocks
-    target_block_time=60,
-    retarget_interval=120,             # ~2 hours
+    halving_interval=210_000,          # ~1 year at 150s blocks
+    target_block_time=150,             # 2.5 minutes, as Litecoin
+    retarget_interval=120,             # ~5 hours
     max_retarget_factor=4,
-    pow_limit_bits=0x1F00FFFF,         # deliberately easy: a laptop can mine
+    pow_limit_bits=0x1F0FFFFF,         # ~4,096 scrypt hashes: ~25s for one CPU
+    pow_algorithm="scrypt-2mb",
     coinbase_maturity=100,
     max_block_weight=1_000_000,
     median_time_blocks=11,
-    max_future_block_time=2 * 60 * 60,
+    max_future_block_time=10 * 60,     # well under the 5h retarget window
     genesis_timestamp=1_785_628_800,   # 2026-08-02T00:00:00Z
     genesis_message=b"Obsidion genesis - forged under pressure, 02 Aug 2026",
+    genesis_nonce=1451,
 )
 
 TESTNET = NetworkParams(
@@ -136,13 +164,15 @@ TESTNET = NetworkParams(
     target_block_time=30,
     retarget_interval=60,
     max_retarget_factor=4,
-    pow_limit_bits=0x1F00FFFF,
+    pow_limit_bits=0x1F0FFFFF,
+    pow_algorithm="scrypt-2mb",
     coinbase_maturity=10,
     max_block_weight=1_000_000,
     median_time_blocks=11,
-    max_future_block_time=2 * 60 * 60,
+    max_future_block_time=5 * 60,      # under the 30m retarget window
     genesis_timestamp=1_785_628_800,
     genesis_message=b"Obsidion testnet",
+    genesis_nonce=1424,
 )
 
 REGTEST = NetworkParams(
@@ -157,12 +187,14 @@ REGTEST = NetworkParams(
     retarget_interval=10_000,          # effectively never retargets
     max_retarget_factor=4,
     pow_limit_bits=0x207FFFFF,         # any hash passes; mining is instant
+    pow_algorithm="sha256d",           # keeps the test suite in seconds
     coinbase_maturity=2,
     max_block_weight=1_000_000,
     median_time_blocks=11,
-    max_future_block_time=2 * 60 * 60,
+    max_future_block_time=600,
     genesis_timestamp=1_785_628_800,
     genesis_message=b"Obsidion regtest",
+    genesis_nonce=6,
 )
 
 NETWORKS: dict[str, NetworkParams] = {

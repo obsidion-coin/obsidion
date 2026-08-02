@@ -50,9 +50,14 @@ class MempoolEntry:
 class Mempool:
     """Unconfirmed transactions, validated on entry and ordered by fee rate."""
 
-    def __init__(self, params: NetworkParams):
+    #: Total serialized bytes the pool will hold before it starts evicting.
+    DEFAULT_MAX_SIZE = 50 * 1024 * 1024
+
+    def __init__(self, params: NetworkParams, max_size: int | None = None):
         self.params = params
+        self.max_size = max_size if max_size is not None else self.DEFAULT_MAX_SIZE
         self.entries: dict[bytes, MempoolEntry] = {}
+        self.total_size = 0
         #: outpoint -> txid of the pooled transaction spending it. This is the
         #: double-spend index: one entry per outpoint, first spender wins.
         self.spends: dict[OutPoint, bytes] = {}
@@ -132,10 +137,49 @@ class Mempool:
             )
 
         fee = input_total - output_total
-        self.entries[txid] = MempoolEntry(tx, fee, tx.size())
+        entry = MempoolEntry(tx, fee, tx.size())
+
+        # Bounded, or the pool is a remote memory-exhaustion target: valid
+        # zero-fee transactions are free to create in bulk, and nothing ever
+        # forced them out. Past the budget an arrival must outbid the cheapest
+        # resident, which also makes flooding cost real money.
+        if self.total_size + entry.size > self.max_size:
+            if not self._make_room_for(entry):
+                raise ConsensusError(
+                    f"mempool is full ({self.total_size} bytes) and {tx!r} does "
+                    f"not outbid the cheapest transaction in it"
+                )
+
+        self.entries[txid] = entry
+        self.total_size += entry.size
         for tx_input in tx.inputs:
             self.spends[tx_input.prevout] = txid
         return fee
+
+    def _make_room_for(self, incoming: MempoolEntry) -> bool:
+        """Evict the worst-paying transactions until `incoming` fits.
+
+        Returns False, changing nothing, if the incoming transaction does not
+        pay better than what would have to be dropped for it.
+        """
+        candidates = sorted(self.entries.values(), key=lambda e: e.fee_rate)
+        freed = 0
+        doomed: list[bytes] = []
+
+        for entry in candidates:
+            if self.total_size - freed + incoming.size <= self.max_size:
+                break
+            if entry.fee_rate >= incoming.fee_rate:
+                return False  # nothing left worth evicting
+            doomed.append(entry.txid)
+            freed += entry.size
+
+        if self.total_size - freed + incoming.size > self.max_size:
+            return False
+
+        for txid in doomed:
+            self._evict_with_descendants(txid)
+        return True
 
     # ------------------------------------------------------------ maintenance
 
@@ -182,6 +226,7 @@ class Mempool:
     def _remove(self, txid: bytes) -> None:
         entry = self.entries.pop(txid, None)
         if entry is not None:
+            self.total_size -= entry.size
             for tx_input in entry.tx.inputs:
                 if self.spends.get(tx_input.prevout) == txid:
                     del self.spends[tx_input.prevout]

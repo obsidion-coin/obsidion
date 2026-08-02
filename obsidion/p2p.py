@@ -65,6 +65,14 @@ INV_BLOCK = 2
 #: Most block hashes returned for one getblocks request.
 MAX_INV = 500
 
+#: Most entries accepted in a peer's block locator. A locator is exponentially
+#: spaced, so even a chain of billions of blocks needs well under this.
+MAX_LOCATOR = 64
+
+#: Most outstanding block requests tracked for one peer. Bounds the memory a
+#: peer can consume by announcing blocks it never intends to deliver.
+MAX_OUTSTANDING_BLOCKS = 2 * MAX_INV
+
 #: Ban threshold. An honest peer scores zero, ever.
 BAN_SCORE = 100
 
@@ -157,6 +165,20 @@ def pack_getblocks(locator: list[bytes]) -> bytes:
 
 def unpack_getblocks(payload: bytes) -> list[bytes]:
     count, offset = read_varint(payload, 0)
+
+    # Fail closed on an impossible count before allocating anything.
+    #
+    # Slicing a bytes object past its end returns b'' rather than raising, so
+    # without this check a nine-byte message declaring 2**64 locator entries
+    # would spin for the rest of the process's life appending empty strings —
+    # a whole node frozen by a packet smaller than this comment. An honest
+    # locator is logarithmic in chain height and never approaches the cap.
+    if count > MAX_LOCATOR or offset + count * 32 > len(payload):
+        raise ProtocolError(
+            f"getblocks declares {count} locator entries, which the payload "
+            f"cannot contain (limit {MAX_LOCATOR})"
+        )
+
     locator = []
     for _ in range(count):
         locator.append(payload[offset : offset + 32])
@@ -514,6 +536,10 @@ class P2PNode:
                 if kind == INV_BLOCK:
                     block_count += 1
                     if self.chain.index_entry(item) is None:
+                        # Bounded: a peer that announces blocks forever and
+                        # delivers none must not grow this set without limit.
+                        if len(peer.requested_blocks) >= MAX_OUTSTANDING_BLOCKS:
+                            continue
                         wanted.append((kind, item))
                         peer.requested_blocks.add(item)
                 elif kind == INV_TX:

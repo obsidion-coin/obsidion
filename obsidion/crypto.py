@@ -61,14 +61,61 @@ def hash160(data: bytes) -> bytes:
     return ripemd160(sha256(data))
 
 
-def pow_hash(header_bytes: bytes) -> bytes:
-    """The proof-of-work hash.
+#: scrypt cost parameters for the mining hash. N=2^12, r=4 gives a 2 MB working
+#: set per hash: 128 * N * r bytes.
+_POW_N, _POW_R, _POW_P = 2**12, 4, 1
 
-    Kept separate from `sha256d` even though it currently delegates to it: this
-    is the single point that would change if Obsidion ever adopts a memory-hard,
-    ASIC-resistant algorithm. Consensus code calls this, never `sha256d`.
+
+def scrypt_pow(header_bytes: bytes) -> bytes:
+    """Memory-hard proof-of-work over an 80-byte header.
+
+    Obsidion mines with scrypt rather than plain SHA-256 for one reason: to
+    keep mining on the ordinary computers people already own. A SHA-256 ASIC
+    is pure combinational logic and beats a CPU by a factor of roughly a
+    hundred million. scrypt at 2 MB cannot be won that way — every hashing
+    core needs its own two megabytes of real memory, and memory is the one
+    thing custom silicon cannot conjure. That narrows the gap to something
+    like ten.
+
+    The header is used as its own salt, so the function is a pure hash of the
+    header with no external inputs.
     """
-    return sha256d(header_bytes)
+    return hashlib.scrypt(
+        header_bytes,
+        salt=header_bytes,
+        n=_POW_N,
+        r=_POW_R,
+        p=_POW_P,
+        dklen=32,
+        maxmem=128 * _POW_N * _POW_R * 4,
+    )
+
+
+#: Proof-of-work algorithms a network may choose, by name.
+#:
+#: This indirection is why swapping Obsidion's mining algorithm touched two
+#: files rather than the whole codebase: every consensus path calls
+#: `pow_hash(header, params)` and none of them knows what it does.
+POW_ALGORITHMS = {
+    "scrypt-2mb": scrypt_pow,
+    "sha256d": sha256d,
+}
+
+
+def pow_hash(header_bytes: bytes, algorithm: str = "scrypt-2mb") -> bytes:
+    """The proof-of-work hash for a given network's algorithm.
+
+    Consensus code calls this and never `sha256d` directly. Note that mining
+    computes this millions of times while *verifying* a block computes it
+    exactly once — which is what makes an expensive hash affordable at all.
+    """
+    try:
+        return POW_ALGORITHMS[algorithm](header_bytes)
+    except KeyError:
+        raise ValueError(
+            f"unknown proof-of-work algorithm {algorithm!r}; "
+            f"expected one of: {', '.join(sorted(POW_ALGORITHMS))}"
+        ) from None
 
 
 def hash_to_int(digest: bytes) -> int:

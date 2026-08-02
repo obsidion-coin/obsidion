@@ -143,8 +143,20 @@ class BlockHeader:
         return BlockHeader(prev_hash, root, timestamp, bits, nonce, version)
 
     def hash(self) -> bytes:
-        """The block's identity: the proof-of-work hash of these 80 bytes."""
-        return crypto.pow_hash(self.serialize())
+        """The block's identity — always SHA-256d, whatever the mining algorithm.
+
+        Identity and proof-of-work are two different jobs and Obsidion keeps
+        them apart. This hash is computed constantly: every parent link, every
+        database lookup, every inventory message, every peer announcement. It
+        has to be cheap. The mining hash is computed once per block when the
+        work is checked, and is deliberately expensive. Litecoin draws the same
+        line for the same reason.
+        """
+        return crypto.sha256d(self.serialize())
+
+    def pow_digest(self, algorithm: str) -> bytes:
+        """The mining hash — the one compared against the difficulty target."""
+        return crypto.pow_hash(self.serialize(), algorithm)
 
     def hash_hex(self) -> str:
         """The hash as conventionally displayed — reversed, so it reads with
@@ -157,8 +169,8 @@ class BlockHeader:
     def difficulty(self) -> float:
         return target_to_difficulty(self.target())
 
-    def satisfies_pow(self) -> bool:
-        """True if this header's hash is below its own stated target.
+    def satisfies_pow(self, algorithm: str) -> bool:
+        """True if this header's mining hash is below its own stated target.
 
         Note this only proves the header is internally consistent. Whether the
         target itself is the correct one for this height is a separate question,
@@ -169,7 +181,7 @@ class BlockHeader:
             target = self.target()
         except ValueError:
             return False
-        return target > 0 and crypto.hash_to_int(self.hash()) <= target
+        return target > 0 and crypto.hash_to_int(self.pow_digest(algorithm)) <= target
 
     def work(self) -> int:
         """How much expected effort this block represents.

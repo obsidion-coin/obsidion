@@ -183,8 +183,8 @@ class ConsensusError(Exception):
     """
 
 
-def check_header_pow(header: BlockHeader) -> None:
-    """Confirm the header's hash meets the target it declares."""
+def check_header_pow(header: BlockHeader, params: NetworkParams) -> None:
+    """Confirm the header's mining hash meets the target it declares."""
     try:
         target = header.target()
     except ValueError as exc:
@@ -192,9 +192,10 @@ def check_header_pow(header: BlockHeader) -> None:
 
     if target <= 0:
         raise ConsensusError("difficulty target is zero")
-    if not header.satisfies_pow():
+    if not header.satisfies_pow(params.pow_algorithm):
         raise ConsensusError(
-            f"insufficient proof of work: hash {header.hash_hex()} exceeds target"
+            f"insufficient proof of work: block {header.hash_hex()} does not "
+            f"meet its target under {params.pow_algorithm}"
         )
 
 
@@ -244,7 +245,7 @@ def check_block_structure(block: Block, params: NetworkParams) -> None:
             "merkle root does not match the transactions in the block"
         )
 
-    check_header_pow(block.header)
+    check_header_pow(block.header, params)
 
 
 def check_coinbase_reward(block: Block, height: int, fees: int, params: NetworkParams) -> None:

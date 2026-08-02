@@ -229,7 +229,7 @@ def test_a_block_evicts_pooled_rivals_it_conflicts_with(chain, pool):
     from obsidion.merkle import merkle_root
 
     block.header.merkle_root = merkle_root([t.txid() for t in block.transactions])
-    assert grind(block)
+    assert grind(block, REGTEST.pow_algorithm)
     chain.accept_block(block, now=block.header.timestamp + 600)
 
     pool.remove_confirmed(block)

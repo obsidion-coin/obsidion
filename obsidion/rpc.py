@@ -198,10 +198,16 @@ class RPCServer:
         }
 
     def rpc_getnewaddress(self) -> str:
-        return self._require_wallet().new_address()
+        # Held under the node lock like every other wallet method. This server
+        # is threaded, and two concurrent calls without it raced to write the
+        # same key file — silently losing one of the keys, and with it any
+        # coins later sent to that address.
+        with self.node.lock:
+            return self._require_wallet().new_address()
 
     def rpc_getaddresses(self) -> list[str]:
-        return self._require_wallet().addresses()
+        with self.node.lock:
+            return self._require_wallet().addresses()
 
     def rpc_getbalance(self) -> dict:
         wallet = self._require_wallet()

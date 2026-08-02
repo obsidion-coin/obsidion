@@ -77,7 +77,7 @@ def build_child(
     )
 
     block = Block(header, transactions)
-    while not block.header.satisfies_pow():
+    while not block.header.satisfies_pow(REGTEST.pow_algorithm):
         block.header.nonce += 1
     return block
 
@@ -165,7 +165,7 @@ def test_duplicate_block_is_reported_not_reapplied(chain):
 def test_block_with_unknown_parent_is_an_orphan(chain):
     stranger = build_child(chain)
     stranger.header.prev_hash = crypto.sha256d(b"never heard of it")
-    while not stranger.header.satisfies_pow():
+    while not stranger.header.satisfies_pow(REGTEST.pow_algorithm):
         stranger.header.nonce += 1
 
     with pytest.raises(OrphanError):
@@ -242,14 +242,49 @@ def test_spending_a_nonexistent_output_is_rejected(chain):
     assert chain.tip_hash == tip_before
 
 
-def test_a_rejected_block_stays_rejected(chain):
-    ghost = spend(crypto.sha256d(b"never existed"), 0, 50 * COIN, [(50 * COIN, BOB)])
-    block = build_child(chain, txs=[ghost])
+def test_a_block_rejected_on_its_header_stays_rejected(chain):
+    """Verdicts the block hash commits to are permanent and cached."""
+    block = build_child(chain, claim_height=99)
 
-    with pytest.raises(ConsensusError):
+    with pytest.raises(ConsensusError, match="height"):
         add(chain, block)
     with pytest.raises(ConsensusError, match="previously rejected"):
         add(chain, block)
+
+
+def test_a_tampered_signature_does_not_poison_the_honest_block(chain):
+    """Regression, found by audit — was a critical network-splitting bug.
+
+    Transaction ids exclude signature bytes, which is what makes them immune
+    to malleability. The consequence is that a block's hash does not commit to
+    its signatures either: an attacker can take a genuine block, corrupt one
+    signature, and send a block with an unchanged hash.
+
+    The node must reject that block — and must NOT remember the hash as
+    invalid, or the real block can never be accepted afterwards and the node
+    forks itself off the network for good.
+    """
+    reward_block = build_child(chain, miner=ALICE)
+    add(chain, reward_block)
+    mine_to(chain, MINER, 1)
+
+    reward = consensus.subsidy(1, REGTEST)
+    payment = spend(reward_block.coinbase().txid(), 0, reward, [(reward, BOB)])
+    honest = build_child(chain, txs=[payment])
+
+    # Corrupt a signature byte. Everything else — merkle root, header, hash —
+    # is untouched, because the txid never covered these bytes.
+    forged = Block.deserialize(honest.serialize())
+    victim = forged.transactions[1].inputs[0]
+    victim.signature = victim.signature[:-1] + bytes([victim.signature[-1] ^ 0xFF])
+    assert forged.hash() == honest.hash(), "the attack depends on an equal hash"
+
+    with pytest.raises(ConsensusError, match="signature"):
+        add(chain, forged)
+
+    # The genuine block must still be accepted.
+    assert add(chain, honest).status == "connected"
+    assert chain.get_utxo(OutPoint(payment.txid(), 0)) is not None
 
 
 def test_spending_with_the_wrong_key_is_rejected(chain):
@@ -438,6 +473,50 @@ def test_reorg_onto_an_invalid_branch_is_refused_and_state_survives(chain):
 
     assert chain.tip_hash == tip_before
     assert chain.total_utxo_value() == total_before
+
+
+def test_disconnecting_a_block_with_an_in_block_spend_chain_creates_no_phantom_coins(
+    chain,
+):
+    """Regression, found by audit — was a critical supply bug.
+
+    When transaction B spends transaction A's output inside the same block,
+    connecting records an undo entry for that output. Disconnecting therefore
+    has to delete what the block created *and* restore what it spent — and the
+    order matters absolutely. Restoring second resurrects A's output, which by
+    then should not exist at all, minting coins from nothing and splitting the
+    node from every peer that got it right.
+    """
+    reward_block = build_child(chain, miner=ALICE)
+    add(chain, reward_block)
+    mine_to(chain, MINER, 1)
+    fork_point = chain.tip_hash
+    reward = consensus.subsidy(1, REGTEST)
+
+    # One block holding a chain of spends: A splits the reward, B spends half.
+    first = spend(
+        reward_block.coinbase().txid(), 0, reward,
+        [(reward // 2, ALICE), (reward - reward // 2, ALICE)],
+    )
+    second = spend(first.txid(), 0, reward // 2, [(reward // 2, BOB)])
+    add(chain, build_child(chain, txs=[first, second]))
+    assert chain.get_utxo(OutPoint(first.txid(), 0)) is None  # spent in-block
+
+    # A heavier branch arrives and that block is disconnected.
+    cursor = fork_point
+    statuses = []
+    for _ in range(3):
+        rival = build_child(chain, parent_hash=cursor, miner=BOB)
+        statuses.append(add(chain, rival).status)
+        cursor = rival.hash()
+    # The branch ties, then overtakes, then simply extends.
+    assert "reorged" in statuses
+
+    # Nothing from the orphaned block may survive anywhere in the UTXO set.
+    assert chain.get_utxo(OutPoint(first.txid(), 0)) is None
+    assert chain.get_utxo(OutPoint(first.txid(), 1)) is None
+    assert chain.get_utxo(OutPoint(second.txid(), 0)) is None
+    assert chain.total_utxo_value() == consensus.circulating_supply(5, REGTEST)
 
 
 def test_supply_invariant_holds_through_growth_and_reorg(chain):

@@ -318,7 +318,7 @@ def test_a_peer_sending_an_invalid_block_is_banned():
             greedy.header.merkle_root = merkle_root(
                 [t.txid() for t in greedy.transactions]
             )
-            while not greedy.header.satisfies_pow():
+            while not greedy.header.satisfies_pow(REGTEST.pow_algorithm):
                 greedy.header.nonce += 1
 
             reader, writer = await asyncio.open_connection("127.0.0.1", victim.port)

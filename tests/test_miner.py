@@ -91,14 +91,14 @@ def test_distinct_extra_nonces_give_distinct_search_spaces(chain):
 
 def test_grinding_solves_a_regtest_template(chain):
     template = build_template(chain, None, MINER_ADDR)
-    assert grind(template)
-    assert template.header.satisfies_pow()
+    assert grind(template, REGTEST.pow_algorithm)
+    assert template.header.satisfies_pow(REGTEST.pow_algorithm)
 
 
 def test_grinding_can_be_interrupted(chain):
     template = build_template(chain, None, MINER_ADDR, )
     template.header.bits = 0x1D00FFFF  # far too hard to solve by accident
-    assert grind(template, should_stop=lambda: True) is False
+    assert grind(template, REGTEST.pow_algorithm, should_stop=lambda: True) is False
 
 
 def test_a_mined_block_is_accepted_by_the_chain_it_was_built_for(chain):

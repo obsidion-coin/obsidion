@@ -37,8 +37,17 @@ from obsidion.transaction import Transaction
 #: Bytes reserved in a template for the coinbase transaction.
 COINBASE_RESERVE = 250
 
-#: Nonces tried between stop-flag and stale-tip checks in the mining thread.
-BATCH = 25_000
+#: Nonces tried between stop-flag and stale-tip checks, per algorithm.
+#:
+#: Sized so a batch lasts a fraction of a second. Too large and the miner keeps
+#: grinding a template that someone else has already beaten; too small and it
+#: spends its time taking locks instead of hashing. A memory-hard hash is some
+#: four thousand times slower than SHA-256d, so one constant cannot serve both.
+BATCH_BY_ALGORITHM = {
+    "sha256d": 25_000,
+    "scrypt-2mb": 64,
+}
+DEFAULT_BATCH = 256
 
 
 def build_template(
@@ -87,6 +96,7 @@ def build_template(
 
 def grind(
     block: Block,
+    algorithm: str,
     *,
     max_nonce: int = 0xFFFFFFFF,
     should_stop=None,
@@ -98,7 +108,7 @@ def grind(
     """
     header = block.header
     while True:
-        if header.satisfies_pow():
+        if header.satisfies_pow(algorithm):
             return True
         if header.nonce >= max_nonce:
             return False
@@ -130,7 +140,7 @@ def mine_block(
             message=message,
             now=now,
         )
-        if grind(block):
+        if grind(block, chain.params.pow_algorithm):
             return block
         extra_nonce += 1
 
@@ -202,6 +212,9 @@ class Miner:
 
     def _run(self) -> None:
         extra_nonce = 0
+        batch = BATCH_BY_ALGORITHM.get(
+            self.chain.params.pow_algorithm, DEFAULT_BATCH
+        )
         while not self._stop.is_set():
             with self.lock:
                 template_tip = self.chain.tip_hash
@@ -218,9 +231,15 @@ class Miner:
             while not self._stop.is_set():
                 # The grind itself runs outside the lock — it touches nothing
                 # but the header, and it is 99.9% of this thread's life.
-                batch_end = min(block.header.nonce + BATCH, 0xFFFFFFFF)
-                solved = grind(block, max_nonce=batch_end)
-                self.hashes_tried += BATCH
+                started_at_nonce = block.header.nonce
+                batch_end = min(block.header.nonce + batch, 0xFFFFFFFF)
+                solved = grind(
+                    block, self.chain.params.pow_algorithm, max_nonce=batch_end
+                )
+                # Count nonces actually tried, not the batch size. Crediting a
+                # full batch on a batch that solved early inflated the reported
+                # hashrate, and that number is shown to users in the explorer.
+                self.hashes_tried += block.header.nonce - started_at_nonce + 1
                 if solved:
                     break
                 if block.header.nonce >= 0xFFFFFFFF:

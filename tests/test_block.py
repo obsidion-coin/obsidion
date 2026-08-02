@@ -34,7 +34,7 @@ def mine(block, limit=2_000_000):
     """Grind the nonce until the header satisfies its own target."""
     for nonce in range(limit):
         block.header.nonce = nonce
-        if block.header.satisfies_pow():
+        if block.header.satisfies_pow(REGTEST.pow_algorithm):
             return block
     raise AssertionError("could not find a valid nonce")
 
@@ -85,25 +85,25 @@ def test_header_with_a_short_prev_hash_is_rejected():
 
 
 def test_mined_header_satisfies_its_target():
-    assert mine(build_block()).header.satisfies_pow()
+    assert mine(build_block()).header.satisfies_pow(REGTEST.pow_algorithm)
 
 
 def test_unmined_header_at_hard_difficulty_fails():
     block = build_block(bits=0x1D00FFFF)
     block.header.nonce = 0
-    assert not block.header.satisfies_pow()
+    assert not block.header.satisfies_pow(REGTEST.pow_algorithm)
 
 
 def test_check_header_pow_raises_for_insufficient_work():
     block = build_block(bits=0x1D00FFFF)
     with pytest.raises(ConsensusError, match="insufficient proof of work"):
-        check_header_pow(block.header)
+        check_header_pow(block.header, REGTEST)
 
 
 def test_zero_target_is_rejected():
     block = build_block(bits=0x00000000)
     with pytest.raises(ConsensusError):
-        check_header_pow(block.header)
+        check_header_pow(block.header, REGTEST)
 
 
 def test_harder_target_yields_more_work():

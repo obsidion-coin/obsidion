@@ -14,19 +14,32 @@ policy — it is enforced by every node's validation of every block.
 | Ticker | **OBSD** |
 | Smallest unit | 1 **shard** = 10⁻⁸ OBSD |
 | Max supply | **20,999,999.9769 OBSD** (enforced by consensus, computed exactly) |
-| Block time | 60 seconds |
+| Block time | 2.5 minutes |
 | Initial reward | 50 OBSD |
-| Halving | every 210,000 blocks (~146 days) — 64 eras, then zero forever |
-| Proof of work | SHA-256d (pluggable — see *Honest limitations*) |
-| Difficulty | retargets every 120 blocks (~2 h), clamped to 4× per period |
+| Halving | every 210,000 blocks (~1 year) — 64 eras, then zero forever |
+| Proof of work | **scrypt, 2 MB working set** — memory-hard, CPU-friendly |
+| Block identity | SHA-256d, kept cheap and separate from the mining hash |
+| Difficulty | retargets every 120 blocks (~5 h), clamped to 4× per period |
 | Ledger | UTXO model, pay-to-pubkey-hash, ECDSA/secp256k1 |
 | Addresses | bech32: `obsd1q…` (mainnet), `tobsd1q…` (testnet) |
-| Genesis (mainnet) | `000043a545b9a010b56fe92dc3fadf67a6380f97e1b902d55ff3e5276cb91b52` |
+| Genesis (mainnet) | `69e33674de2c169233dbbdca69dcd1ede122207cd7ead83c5564e08172862a7a` |
 
-Half of all OBSD that will ever exist mints in the first era. The emission
-curve — and the true cap of 20,999,999.9769, a hair under 21M because each
-halving truncates to whole shards — is bit-for-bit the same arithmetic as
-Bitcoin's.
+Half of all OBSD that will ever exist mints in the first era. The true cap of
+20,999,999.9769 — a hair under 21M, because each halving truncates to whole
+shards — is bit-for-bit the same arithmetic Bitcoin arrives at.
+
+**Why scrypt and not SHA-256.** Obsidion is meant to be mined on computers
+people already own. A SHA-256 ASIC is pure combinational logic and beats a CPU
+by a factor of roughly a hundred million, so a chain using it is owned by
+whoever buys one miner. scrypt at 2 MB cannot be won that way: every hashing
+core needs its own two megabytes of real memory, and memory is the one thing
+custom silicon cannot conjure. That narrows the gap to something like ten.
+
+The cost is paid in verification — but only once per block, not once per hash.
+A node checks ~53 minutes' worth of hashing per year of chain history on first
+sync, which is why the block time is 2.5 minutes rather than one: at
+60-second blocks that figure trebles, and the entire coin supply would also
+mint out within about four years, leaving miners unpaid.
 
 ## Quickstart
 
@@ -93,23 +106,23 @@ environment variable for unattended nodes; otherwise you are prompted.
 ```
 obsidion/
   params.py      every constant that defines the coin (rename/retune here)
-  crypto.py      sha256d, hash160, secp256k1, bech32   [+ _ripemd160.py fallback]
+  crypto.py      sha256d, hash160, secp256k1, bech32, scrypt PoW  [+ _ripemd160.py]
   merkle.py      merkle root & inclusion proofs (CVE-2012-2459 guarded)
   transaction.py UTXO transactions; malleability-proof txids; BIP-143 amounts
   block.py       80-byte headers, compact targets, proof-of-work
   consensus.py   subsidy/halving, the supply cap, difficulty, validation rules
   chainstate.py  the UTXO set; connect/disconnect/reorg with atomic undo
   storage.py     SQLite persistence (the DB is the only copy of chain state)
-  mempool.py     admission, fee ordering, conflict eviction, reorg recovery
+  mempool.py     admission, fee ordering, size budget, reorg recovery
   miner.py       template assembly + nonce grinding (threaded)
-  p2p.py         asyncio TCP: handshake, gossip, locator sync, ban scoring
+  p2p.py         asyncio TCP gossip, locator sync, ban scoring
   wallet.py      encrypted keys (scrypt + HMAC-CTR), coin selection, signing
   rpc.py         JSON-RPC over localhost HTTP — the only door into a node
   node.py        the daemon that wires it all together     → obsidion-node
   cli.py         command-line client                       → obsidion-cli
 explorer/
   app.py         Flask explorer, speaks only RPC           → obsidion-explorer
-tests/           302 tests, unit through three-node integration
+tests/           343 tests, unit through three-node integration
 ```
 
 Design rules that hold everywhere:
@@ -125,6 +138,9 @@ Design rules that hold everywhere:
   take the chain down with it.
 - **The node is the only thing that touches chain state.** Wallet, CLI, and
   explorer are all RPC clients and cannot corrupt it.
+- **The mining algorithm is one function.** `crypto.pow_hash` dispatches by
+  name and nothing else knows what it does — which is how the switch from
+  SHA-256d to scrypt touched two files.
 
 ## Development
 
@@ -141,28 +157,50 @@ winning branch; a partitioned three-node network converges; racing miners
 cannot fork the network permanently; the UTXO total equals the circulating
 supply at every height.
 
+`tests/test_hardening.py` holds regressions for real defects found by an
+adversarial audit — see below.
+
 Three networks ship in `params.py`: `mainnet`, `testnet` (fast halvings,
-throwaway coins), `regtest` (instant blocks for development). Nodes on
-different networks cannot exchange a single message — the 4-byte network
-magic fails first.
+throwaway coins), `regtest` (instant blocks and cheap SHA-256d, so the suite
+runs in seconds). Nodes on different networks cannot exchange a single
+message — the 4-byte network magic fails first.
+
+## What an audit found
+
+The first version passed 306 tests and still contained two critical bugs. Both
+were found by reviewers attacking the code rather than exercising it, and both
+are now fixed with regression tests:
+
+- **Reorgs could mint coins from nothing.** Disconnecting a block deleted the
+  outputs it created *before* restoring the ones it spent. When a block
+  contained a chain of spends within itself, that order resurrected an
+  intermediate output which should no longer exist — inflating supply and
+  permanently splitting the node from every peer that got it right.
+- **A single corrupted signature could fork a node forever.** Because txids
+  exclude signature bytes (the fix for malleability), a block's hash does not
+  commit to its signatures either. An attacker could take a valid block,
+  corrupt one signature, and send it; the node cached that hash as invalid and
+  then refused the genuine block for good.
+
+Also fixed: a nine-byte message that froze a node by declaring 2⁶⁴ locator
+entries; concurrent `getnewaddress` calls silently discarding keys whose
+addresses had already been handed out; an unbounded mempool; a timestamp
+allowance wide enough to halve the next difficulty; wallet saves without
+`fsync`; and the wallet's network field sitting outside its authentication tag.
 
 ## Honest limitations
 
 Read this section before telling anyone this is money.
 
-- **SHA-256d is Bitcoin's algorithm, and Bitcoin ASICs exist.** One
-  second-hand ASIC out-hashes every CPU that will ever run this code combined,
-  so "easy to mine on a laptop" only holds until someone points an ASIC at
-  it. The hash sits behind a single function (`crypto.pow_hash`) precisely so
-  a memory-hard algorithm (Argon2/RandomX-style) can replace it — do that
-  **before** a public launch; after launch it is a hard fork.
 - **A small network is a vulnerable network.** Whoever holds >50% of hashpower
-  can rewrite recent history and double-spend. This is true of every young
-  PoW chain and is not fixable in code.
+  can rewrite recent history and double-spend. scrypt raises the cost of
+  acquiring that hashpower but does not remove the risk, and no young
+  proof-of-work chain is exempt.
 - **Unaudited cryptography-adjacent code.** The primitives are standard
-  (secp256k1 via the `ecdsa` package, SHA-256, RIPEMD-160 validated against
-  official vectors, RFC 6979 signatures, bech32 against BIP-173 vectors), but
-  no external party has audited this codebase.
+  (secp256k1 via the `ecdsa` package, SHA-256, scrypt from OpenSSL,
+  RIPEMD-160 validated against official vectors, RFC 6979 signatures, bech32
+  against BIP-173 vectors), and one adversarial review has been run against
+  the codebase — but no professional security firm has audited it.
 - **RPC is unauthenticated localhost HTTP.** Anyone who can reach the port
   controls the wallet. Never expose it; tunnel over SSH for remote use.
 - **Pure-Python signature verification** (~ms per signature) caps realistic
@@ -172,6 +210,10 @@ Read this section before telling anyone this is money.
   packaged binaries with code signing, a fair-launch announcement (publish
   code + genesis before mining, or it is a stealth premine), and legal review
   of how coins are distributed. None of that is code.
+- **Consensus parameters are final at launch.** Block time, halving interval,
+  supply cap and mining algorithm cannot be changed afterwards without a hard
+  fork that splits the chain. They are settled now, deliberately, before
+  anyone is mining.
 
 ## License
 

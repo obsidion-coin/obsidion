@@ -23,7 +23,7 @@ def test_genesis_is_structurally_valid(params):
 
 @pytest.mark.parametrize("params", ALL_NETWORKS, ids=IDS)
 def test_genesis_satisfies_its_proof_of_work(params):
-    assert create_genesis_block(params).header.satisfies_pow()
+    assert create_genesis_block(params).header.satisfies_pow(params.pow_algorithm)
 
 
 @pytest.mark.parametrize("params", ALL_NETWORKS, ids=IDS)

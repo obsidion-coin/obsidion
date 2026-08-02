@@ -45,11 +45,18 @@ def genesis_coinbase(params: NetworkParams) -> Transaction:
 
 @lru_cache(maxsize=None)
 def create_genesis_block(params: NetworkParams) -> Block:
-    """Mine the genesis block for `params`.
+    """Produce the genesis block for `params`.
 
-    Deterministic: the nonce search starts at zero and stops at the first value
-    satisfying the network's easiest target, so the result depends only on the
-    parameters. Cached because the answer never changes for a given network.
+    Deterministic either way: with `genesis_nonce` set the stored answer is
+    verified, and without one the nonce is searched from zero, which lands on
+    the same value every time. Cached because it never changes for a network.
+
+    The stored nonce exists for cost, not trust. Under a memory-hard mining
+    algorithm the search runs to tens of thousands of expensive hashes, and
+    paying that on every node start-up would put twenty-five seconds in front
+    of a user opening their wallet. Verifying costs a single hash. A test
+    re-derives every network's nonce from scratch, so a wrong value in
+    params.py cannot go unnoticed.
     """
     coinbase = genesis_coinbase(params)
     header = BlockHeader(
@@ -57,10 +64,18 @@ def create_genesis_block(params: NetworkParams) -> Block:
         merkle_root=merkle_root([coinbase.txid()]),
         timestamp=params.genesis_timestamp,
         bits=params.pow_limit_bits,
-        nonce=0,
+        nonce=params.genesis_nonce or 0,
     )
 
-    while not header.satisfies_pow():
+    if params.genesis_nonce is not None:
+        if not header.satisfies_pow(params.pow_algorithm):
+            raise RuntimeError(
+                f"the stored genesis nonce for {params.name} does not satisfy "
+                "its proof of work; params.py has been edited inconsistently"
+            )
+        return Block(header, [coinbase])
+
+    while not header.satisfies_pow(params.pow_algorithm):
         header.nonce += 1
         if header.nonce > 0xFFFFFFFF:  # pragma: no cover — impossible at pow_limit
             raise RuntimeError(

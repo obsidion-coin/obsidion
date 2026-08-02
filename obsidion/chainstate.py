@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import struct
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from sqlite3 import IntegrityError
 
 from obsidion import consensus
@@ -215,16 +215,7 @@ class ChainState:
         if parent.status == "invalid":
             raise ConsensusError("block builds on a known-invalid block")
 
-        # Contextual rules: this block, at this position, on this branch.
         height = parent.height + 1
-        consensus.check_coinbase_height(block, height)
-        consensus.check_expected_bits(
-            block.header, self.expected_bits_for_next(parent.hash)
-        )
-        consensus.check_timestamp(
-            block.header, self._recent_timestamps(parent), int(now), self.params
-        )
-
         entry = IndexEntry(
             hash=block_hash,
             prev_hash=parent.hash,
@@ -235,6 +226,22 @@ class ChainState:
             active=False,
             status="valid",
         )
+
+        # Contextual rules that the block hash *does* commit to. Height, bits
+        # and timestamp all live in the header or the coinbase, so a block
+        # failing one of these can never be made to pass while keeping this
+        # hash. That makes the verdict permanent and safe to cache.
+        try:
+            consensus.check_coinbase_height(block, height)
+            consensus.check_expected_bits(
+                block.header, self.expected_bits_for_next(parent.hash)
+            )
+            consensus.check_timestamp(
+                block.header, self._recent_timestamps(parent), int(now), self.params
+            )
+        except ConsensusError:
+            self._remember_invalid(block, entry)
+            raise
 
         tip = self.tip
         self.db.begin()
@@ -253,19 +260,35 @@ class ChainState:
             self.db.commit()
         except ConsensusError:
             # One rollback erases every effect of the failed attempt, including
-            # partial reorg work. Then record the block as invalid so it is
-            # refused instantly if offered again.
+            # partial reorg work.
+            #
+            # Deliberately NOT cached as invalid. Failures down here come from
+            # `_connect`, which checks signatures — and signature bytes are the
+            # one part of a block the hash does not commit to, precisely because
+            # txids are computed over the unsigned form to defeat malleability.
+            # An attacker can therefore take a valid block, corrupt one
+            # signature, and hand it over with an unchanged hash. Caching that
+            # verdict would make the node reject the genuine block forever and
+            # fork itself off the network permanently. Re-validating costs a few
+            # signature checks; the peer that sent it is banned regardless.
             self.db.rollback()
-            self.db.put_block(block_hash, block.serialize())
-            self.db.put_index(
-                IndexEntry(**{**entry.__dict__, "status": "invalid"})
-            )
             raise
 
         status = "reorged" if disconnected else "connected"
         return ConnectResult(status, disconnected, connected)
 
     # -------------------------------------------------------------- internals
+
+    def _remember_invalid(self, block: Block, entry: IndexEntry) -> None:
+        """Record a permanent verdict of invalid for a block.
+
+        Only ever called for failures the block hash commits to. See the note
+        in `accept_block` for why signature failures must not come through here.
+        """
+        self.db.begin()
+        self.db.put_block(entry.hash, block.serialize())
+        self.db.put_index(replace(entry, status="invalid"))
+        self.db.commit()
 
     def _ensure_genesis(self) -> None:
         if self.db.get_meta(_TIP_KEY) is not None:
@@ -446,18 +469,27 @@ class ChainState:
 
     def _disconnect(self, block_hash: bytes) -> list[Transaction]:
         """Remove the block at `block_hash` from the UTXO set using its undo
-        record, and return its non-coinbase transactions."""
+        record, and return its non-coinbase transactions.
+
+        **The order of these two passes is a consensus rule, not a style
+        choice.** A block may contain a chain of spends within itself — B
+        spending an output A created a few transactions earlier. Connecting
+        recorded an undo entry for that output, because from the UTXO set's
+        point of view it really was spent. Disconnecting must therefore both
+        restore what the block consumed and delete what it produced, and A's
+        output is in *both* sets.
+
+        Restoring first and deleting second resolves that overlap correctly:
+        the resurrected entry is then removed again, because the block that
+        created it is going away. Doing it the other way round leaves the
+        entry alive — coins conjured out of nothing, and a node that silently
+        disagrees with every peer that got it right.
+        """
         raw = self.db.get_block_raw(block_hash)
         assert raw is not None, "cannot disconnect a block that was never stored"
         block = Block.deserialize(raw)
 
-        # Delete every output this block created...
-        for transaction in reversed(block.transactions):
-            txid = transaction.txid()
-            for index in range(len(transaction.outputs)):
-                self.db.delete_utxo(txid, index)
-
-        # ...and resurrect every output it spent.
+        # First, resurrect every output this block spent.
         undo_raw = self.db.get_undo(block_hash)
         assert undo_raw is not None, "block connected without an undo record"
         count, offset = read_varint(undo_raw, 0)
@@ -467,6 +499,13 @@ class ChainState:
             )
             offset += _UNDO_SIZE
             self.db.add_utxo(txid, index, amount, pubkey_hash, height, bool(coinbase))
+
+        # Then delete every output it created, including any the pass above
+        # just restored because they were spent within this same block.
+        for transaction in reversed(block.transactions):
+            txid = transaction.txid()
+            for index in range(len(transaction.outputs)):
+                self.db.delete_utxo(txid, index)
 
         self.db.set_active(block_hash, False)
         return [t for t in block.transactions if not t.is_coinbase()]
