@@ -115,6 +115,65 @@ def test_a_whole_economy_functions_across_three_nodes(network):
             assert node.chain.total_utxo_value() == supply
 
 
+def test_a_stranger_joins_the_network_knowing_only_the_seeds(tmp_path):
+    """The launch-day path, simulated exactly.
+
+    This is the moment everything else depends on: someone installs the
+    software, runs it with no arguments, and it finds the network on its own.
+    If this does not work, the announcement is worthless however good the
+    chain is — nobody can reach it.
+
+    A 'seed' node is started and mines some history. Then a second node is
+    built the way a stranger's would be: seed addresses baked into its network
+    parameters, no --connect, no address book, nothing told to it by hand.
+    """
+    from dataclasses import replace
+
+    seed_wallet = Wallet.create(tmp_path / "seed.wallet", "pw", REGTEST)
+    seed = ObsidionNode(REGTEST, wallet=seed_wallet)
+    seed.start()
+
+    try:
+        seed.generate(6)
+        assert height(seed) == 6
+
+        # Exactly what editing params.py before launch produces.
+        published = replace(
+            REGTEST, seed_nodes=(f"127.0.0.1:{seed.p2p.port}",)
+        )
+
+        newcomer_wallet = Wallet.create(tmp_path / "new.wallet", "pw", published)
+        newcomer = ObsidionNode(
+            published,
+            wallet=newcomer_wallet,
+            seeds=[
+                (host, int(port))
+                for host, _, port in (s.rpartition(":") for s in published.seed_nodes)
+            ],
+        )
+        newcomer.start()
+
+        try:
+            wait_until(
+                lambda: height(newcomer) == 6,
+                what="a stranger syncing the chain from the seed alone",
+            )
+            assert tip(newcomer) == tip(seed)
+
+            # And it is a full participant, not just a spectator: a block it
+            # mines must propagate back to the seed.
+            newcomer.generate(1)
+            wait_until(
+                lambda: height(seed) == 7,
+                what="the newcomer's block reaching the seed",
+            )
+            assert tip(seed) == tip(newcomer)
+        finally:
+            newcomer.stop()
+    finally:
+        seed.stop()
+
+
 def test_background_miners_race_without_forking_forever(network):
     """A and C both mine with real miner threads for a few seconds — a genuine
     race, blocks colliding, the works. When the dust settles, all three nodes
