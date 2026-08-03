@@ -16,19 +16,38 @@ say so. A fair launch is the only launch you get one shot at.
 Nothing else can happen first, because the seed nodes you are about to run
 must be running the same published code everyone else will.
 
-```bash
-gh repo create obsidion --public --source=. --remote=origin --push
-```
+**Identity is already set up.** This repository commits as
+`obsidioncoin-tech <312787066+obsidioncoin-tech@users.noreply.github.com>` —
+your GitHub account's noreply address, so no personal inbox enters public git
+history and commits still link to your profile. It is pinned in the repo's
+local git config, so future commits keep it automatically. Do not override it
+with `--author` or a global config, and never `git commit` here from a shell
+that sets a different email.
 
-Or create the repository on github.com and:
+Create the organisation at <https://github.com/organizations/plan> (choose the
+free plan), named **`obsidioncoin`**. Then:
 
 ```bash
-git remote add origin https://github.com/YOURNAME/obsidion.git
+git remote add origin https://github.com/obsidioncoin/obsidion.git
 git push -u origin master
 ```
 
+Or in one step with the GitHub CLI, once the org exists:
+
+```bash
+gh repo create obsidioncoin/obsidion --public --source=. --remote=origin --push
+```
+
+The result is `github.com/obsidioncoin/obsidion` — which is the URL that goes
+in the announcement, the explorer footer, and every seed server's clone
+command, so it should not change afterwards.
+
+**Before you push, look at what you are publishing.** `git log -p` one last
+time. Once it is public it is cloned, mirrored and indexed within hours, and
+nothing is recallable.
+
 The repository already contains `LICENSE` (MIT), a CI workflow that runs all
-343 tests on Linux, Windows and macOS, and a README that states the known
+350 tests on Linux, Windows and macOS, and a README that states the known
 limitations plainly. Leave that section in. A project that names its own weak
 points is trusted more than one that does not, and everything in it is
 discoverable anyway.
@@ -48,7 +67,7 @@ sudo apt update && sudo apt install -y python3 python3-venv git
 sudo useradd --system --create-home --home-dir /var/lib/obsidion obsidion
 sudo -u obsidion -H bash -c '
   cd /var/lib/obsidion
-  git clone https://github.com/YOURNAME/obsidion.git
+  git clone https://github.com/obsidioncoin/obsidion.git
   cd obsidion
   python3 -m venv .venv
   .venv/bin/pip install ecdsa flask pytest
