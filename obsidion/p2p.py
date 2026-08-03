@@ -73,6 +73,17 @@ MAX_LOCATOR = 64
 #: peer can consume by announcing blocks it never intends to deliver.
 MAX_OUTSTANDING_BLOCKS = 2 * MAX_INV
 
+#: Outbound connections a node tries to keep open. Bitcoin uses eight for the
+#: same reason: enough that losing a few peers is survivable, few enough that
+#: the network is not a mesh.
+TARGET_OUTBOUND = 8
+
+#: Seconds between rounds of connection upkeep.
+MAINTENANCE_INTERVAL = 20
+
+#: A peer silent for this long is pinged; silent again and it is dropped.
+PING_AFTER_IDLE = 90
+
 #: Ban threshold. An honest peer scores zero, ever.
 BAN_SCORE = 100
 
@@ -249,6 +260,8 @@ class Peer:
         self.listen_port: int | None = None
         self.agent = ""
         self.ban_score = 0
+        self.last_seen = time.monotonic()
+        self.awaiting_pong = False
 
         #: Block hashes we asked this peer for and have not yet received.
         self.requested_blocks: set[bytes] = set()
@@ -289,17 +302,33 @@ class P2PNode:
         self.addrbook: set[tuple[str, int]] = set()
         self.banned: set[str] = set()
         self.server: asyncio.Server | None = None
+        self.seeds: list[tuple[str, int]] = list(params.seed_nodes)
+        #: Addresses dialled and found unreachable. Retried, but only after
+        #: everything else has been tried.
+        self.failed: set[tuple[str, int]] = set()
+        self._maintenance: asyncio.Task | None = None
 
     # -------------------------------------------------------------- lifecycle
 
-    async def start(self) -> None:
+    async def start(self, maintain: bool = True) -> None:
         self.server = await asyncio.start_server(
             self._on_inbound, self.host, self.port
         )
         self.port = self.server.sockets[0].getsockname()[1]
         log.info("listening on %s:%d", self.host, self.port)
 
+        if maintain:
+            self._maintenance = asyncio.ensure_future(self._maintain())
+
     async def stop(self) -> None:
+        if self._maintenance is not None:
+            self._maintenance.cancel()
+            try:
+                await self._maintenance
+            except asyncio.CancelledError:
+                pass
+            self._maintenance = None
+
         # Order matters. Since Python 3.12, Server.wait_closed() waits for
         # every connection handler to finish — and the handlers sit blocked in
         # read_message until their peer disappears. Drop the peers first so the
@@ -318,11 +347,82 @@ class P2PNode:
             reader, writer = await asyncio.open_connection(host, port)
         except OSError as exc:
             log.info("could not reach %s:%d: %s", host, port, exc)
+            self.failed.add((host, port))
             return
+
+        self.failed.discard((host, port))
         peer = Peer(reader, writer, host, outbound=True)
         self.addrbook.add((host, port))
         self.peers.add(peer)
         asyncio.ensure_future(self._serve_peer(peer))
+
+    # ------------------------------------------------------------ maintenance
+
+    async def _maintain(self) -> None:
+        """Keep the node connected, for as long as it is running.
+
+        Without this a node dials its seeds once at start-up and, if those
+        connections ever drop, sits alone forever while believing itself fine.
+        On a long-lived network that is the difference between a node and an
+        ornament. Two jobs, every `MAINTENANCE_INTERVAL` seconds:
+
+        * **Notice dead peers.** TCP can hold a connection open long after the
+          machine at the other end has gone. A peer that has said nothing for
+          `PING_AFTER_IDLE` gets a ping; still nothing by the next round and it
+          is dropped, freeing the slot for a peer that answers.
+        * **Top up outbound connections.** Dial toward `TARGET_OUTBOUND` from
+          the address book, falling back to the configured seeds when nothing
+          else is known or everything known has failed.
+        """
+        while True:
+            try:
+                await asyncio.sleep(MAINTENANCE_INTERVAL)
+                await self._check_liveness()
+                await self._top_up_outbound()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — this loop must outlive its errors
+                # One bad round must not silently end connection upkeep and
+                # strand the node; log it and try again next interval.
+                log.exception("error during connection maintenance")
+
+    async def _check_liveness(self) -> None:
+        now = time.monotonic()
+        for peer in list(self.peers):
+            if now - peer.last_seen < PING_AFTER_IDLE:
+                continue
+            if peer.awaiting_pong:
+                log.info("%r stopped answering; dropping", peer)
+                await self._drop(peer)
+            else:
+                peer.awaiting_pong = True
+                await self._send(peer, "ping", struct.pack("<Q", secrets.randbits(64)))
+
+    async def _top_up_outbound(self) -> None:
+        needed = TARGET_OUTBOUND - sum(1 for peer in self.peers if peer.outbound)
+        if needed <= 0:
+            return
+
+        engaged = {(peer.host, peer.listen_port) for peer in self.peers}
+        candidates = [
+            address
+            for address in self.addrbook
+            if address not in engaged
+            and address not in self.failed
+            and address[0] not in self.banned
+        ]
+
+        if not candidates:
+            # Nothing fresh to try. Forget past failures and fall back to the
+            # seeds — a seed that was unreachable an hour ago may be back, and
+            # a node with no peers has nothing to lose by asking again.
+            self.failed.clear()
+            candidates = [
+                address for address in self.seeds if address not in engaged
+            ]
+
+        for host, port in candidates[:needed]:
+            await self.connect(host, port)
 
     def handshaked_peers(self) -> list[Peer]:
         return [peer for peer in self.peers if peer.handshaked]
@@ -441,6 +541,9 @@ class P2PNode:
                 command, payload = await read_message(
                     peer.reader, self.params.magic, max_payload
                 )
+                # Any message at all proves the peer is alive.
+                peer.last_seen = time.monotonic()
+                peer.awaiting_pong = False
                 await self._dispatch(peer, command, payload)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass  # peer went away; that is what peers do
@@ -487,6 +590,8 @@ class P2PNode:
         await self._send(peer, "pong", payload)
 
     async def _handle_pong(self, peer: Peer, payload: bytes) -> None:
+        # The liveness bookkeeping already happened in _serve_peer, which
+        # timestamps every inbound message. Nothing further is required.
         pass
 
     async def _handle_getaddr(self, peer: Peer, payload: bytes) -> None:

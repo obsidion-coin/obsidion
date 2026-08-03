@@ -361,6 +361,142 @@ def test_a_peer_sending_garbage_is_dropped():
     run(scenario())
 
 
+# --------------------------------------------------------------------------
+# Staying connected
+# --------------------------------------------------------------------------
+
+
+def test_a_node_dials_back_up_to_its_outbound_target():
+    """A node that loses its peers must reconnect on its own. The maintenance
+    loop is what keeps a long-running node from quietly ending up alone."""
+
+    async def scenario():
+        net = Net()
+        try:
+            a, b = await net.node(), await net.node()
+            # A knows where B lives but is not connected to it.
+            a.addrbook.add(("127.0.0.1", b.port))
+            assert not a.peers
+
+            await a._top_up_outbound()
+
+            await wait_for(
+                lambda: a.handshaked_peers(), message="A dialling from its addrbook"
+            )
+        finally:
+            await net.close()
+
+    run(scenario())
+
+
+def test_seeds_are_the_fallback_when_nothing_else_is_known():
+    """The bootstrap case: a brand-new node knows nobody, so the configured
+    seeds are the only way in."""
+
+    async def scenario():
+        net = Net()
+        try:
+            a, b = await net.node(), await net.node()
+            a.seeds = [("127.0.0.1", b.port)]
+            assert not a.addrbook
+
+            await a._top_up_outbound()
+
+            await wait_for(lambda: a.handshaked_peers(), message="A dialling a seed")
+        finally:
+            await net.close()
+
+    run(scenario())
+
+
+def test_seeds_are_retried_after_every_known_address_has_failed():
+    """A seed unreachable an hour ago may be back. A node with no peers has
+    nothing to lose by asking again."""
+
+    async def scenario():
+        net = Net()
+        try:
+            a, b = await net.node(), await net.node()
+            # Everything A knows is marked dead, including the live node.
+            a.addrbook.add(("127.0.0.1", b.port))
+            a.failed.add(("127.0.0.1", b.port))
+            a.seeds = [("127.0.0.1", b.port)]
+
+            await a._top_up_outbound()
+
+            assert not a.failed, "past failures should have been cleared"
+            await wait_for(lambda: a.handshaked_peers(), message="A retrying the seed")
+        finally:
+            await net.close()
+
+    run(scenario())
+
+
+def test_an_unreachable_address_is_remembered_as_failed():
+    async def scenario():
+        net = Net()
+        try:
+            a = await net.node()
+            # Port 1 on localhost: nothing listens there.
+            await a.connect("127.0.0.1", 1)
+
+            assert ("127.0.0.1", 1) in a.failed
+            assert not a.peers
+        finally:
+            await net.close()
+
+    run(scenario())
+
+
+def test_a_silent_peer_is_pinged_and_then_dropped():
+    """TCP will happily hold a connection to a machine that is gone. Idle
+    peers get one ping; still silent by the next round and the slot is freed
+    for a peer that answers."""
+
+    async def scenario():
+        net = Net()
+        try:
+            a, b = await net.node(), await net.node()
+            await a.connect("127.0.0.1", b.port)
+            await wait_for(lambda: a.handshaked_peers())
+
+            (peer,) = a.handshaked_peers()
+            peer.last_seen -= 10_000  # pretend it has been quiet for hours
+
+            await a._check_liveness()
+            assert peer.awaiting_pong, "an idle peer should have been pinged"
+
+            # B is real and answers, so the peer is marked live again.
+            await wait_for(
+                lambda: not peer.awaiting_pong, message="B answering the ping"
+            )
+        finally:
+            await net.close()
+
+    run(scenario())
+
+
+def test_a_peer_that_never_answers_a_ping_is_dropped():
+    async def scenario():
+        net = Net()
+        try:
+            a, b = await net.node(), await net.node()
+            await a.connect("127.0.0.1", b.port)
+            await wait_for(lambda: a.handshaked_peers())
+
+            (peer,) = a.handshaked_peers()
+            # Already pinged once and still silent — the second round evicts.
+            peer.last_seen -= 10_000
+            peer.awaiting_pong = True
+
+            await a._check_liveness()
+            assert peer not in a.peers
+        finally:
+            await net.close()
+
+    run(scenario())
+
+
 def test_an_oversized_message_is_refused():
     async def scenario():
         net = Net()

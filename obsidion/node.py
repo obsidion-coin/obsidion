@@ -79,6 +79,11 @@ class ObsidionNode:
         )
         self.wallet = wallet
         self.seeds = seeds or []
+        # Peers given here are also the fallback the maintenance loop dials
+        # when the address book runs dry, alongside any baked into params.
+        for address in self.seeds:
+            if address not in self.p2p.seeds:
+                self.p2p.seeds.append(address)
 
         self.miner: Miner | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -254,10 +259,17 @@ def main(argv: list[str] | None = None) -> None:
     params = get_network(args.network)
     wallet = _load_or_create_wallet(args, params)
 
+    # Peers named on the command line take precedence; otherwise fall back to
+    # the network's built-in seeds, which is how a first-time user joins
+    # without being told an address by hand.
+    specs = args.connect or list(params.seed_nodes)
     seeds = []
-    for spec in args.connect:
+    for spec in specs:
         host, _, port = spec.rpartition(":")
-        seeds.append((host, int(port)))
+        try:
+            seeds.append((host, int(port)))
+        except ValueError:
+            raise SystemExit(f"malformed peer address {spec!r}; expected host:port")
 
     node = ObsidionNode(
         params,
@@ -285,6 +297,13 @@ def main(argv: list[str] | None = None) -> None:
     print(f"  height   {current_height}")
     print(f"  p2p      {node.p2p.host}:{node.p2p.port}")
     print(f"  rpc      127.0.0.1:{rpc.port}")
+    if seeds:
+        print(f"  peers    connecting to {len(seeds)}: " + ", ".join(
+            f"{host}:{port}" for host, port in seeds[:3]
+        ))
+    else:
+        print("  peers    none configured — this node is alone until someone")
+        print("           connects to it, or you pass --connect host:port")
     if wallet is not None:
         print(f"  wallet   {wallet.addresses()[0]}")
 

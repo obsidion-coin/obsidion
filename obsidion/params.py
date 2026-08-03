@@ -109,6 +109,30 @@ class NetworkParams:
     """Embedded in the genesis coinbase, as Bitcoin's carries a newspaper
     headline. Proves the chain was not started earlier than this date."""
 
+    seed_nodes: tuple[tuple[str, int], ...] = ()
+    """Addresses a fresh node dials to find the network.
+
+    This is the bootstrap problem: a node with no peers and no way to learn any
+    is simply alone. One reachable seed is enough — the node asks it for other
+    addresses, and from there discovery is self-sustaining. Seeds hold no
+    special authority and validate nothing on anyone's behalf; they are only a
+    first phone number. Anyone can run one, and a node that already knows peers
+    never needs them again.
+
+    Fill these in before publishing binaries, or every user must pass
+    --connect by hand."""
+
+    seed_nodes: tuple[str, ...] = ()
+    """Addresses a fresh node dials when it knows nobody yet, as "host:port".
+
+    This is the bootstrap problem: peer discovery works by asking peers, which
+    is useless before you have one. Every node that joins learns the wider
+    network from these, then gossips addresses on its own — so seeds matter
+    enormously on day one and barely at all once the network has depth.
+
+    Keep at least two, on different providers. A network whose only seed is
+    offline is a network nobody new can join, however many nodes are running."""
+
     genesis_nonce: int | None = None
     """The winning nonce for this network's genesis block, if already found.
 
@@ -150,6 +174,9 @@ MAINNET = NetworkParams(
     max_future_block_time=10 * 60,     # well under the 5h retarget window
     genesis_timestamp=1_785_628_800,   # 2026-08-02T00:00:00Z
     genesis_message=b"Obsidion genesis - forged under pressure, 02 Aug 2026",
+    # Fill these in with your own always-on nodes before announcing the
+    # network. Until then a new node can only join via --connect.
+    seed_nodes=(),
     genesis_nonce=1451,
 )
 
