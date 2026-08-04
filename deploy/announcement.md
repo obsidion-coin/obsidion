@@ -16,6 +16,10 @@ No premine. No presale. No dev fund. No ICO. Every OBSD that will ever exist
 has to be mined, starting at the time above, and I mine on the same terms as
 everyone else.
 
+*Obsidi**o**n, with an "o" — named for the volcanic glass. Not the note-taking
+app, and not the unrelated coin trading as ODN. Getting that out of the way
+first, because everyone asks.*
+
 **What it is.** A Bitcoin-style chain built from scratch in Python — UTXO
 ledger, secp256k1 signatures, proof-of-work mining, peer-to-peer gossip. Not a
 token on someone else's chain, and not a fork with the constants changed. It

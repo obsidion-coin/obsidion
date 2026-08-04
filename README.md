@@ -1,8 +1,12 @@
 # Obsidion (OBSD)
 
 A CPU-mineable, Bitcoin-style proof-of-work cryptocurrency, built from first
-principles in Python. Obsidian is volcanic glass — forged under pressure,
-holding the sharpest edge of any natural material.
+principles in Python. Named for obsidian, the volcanic glass — forged under
+pressure, holding the sharpest edge of any natural material.
+
+**Obsidi*o*n, with an "o".** Not the note-taking app, not Obsidian
+Entertainment, and not the unrelated coin trading as ODN. Different project,
+different people, no connection to any of them.
 
 Obsidion works the way Bitcoin works: miners race to solve proof-of-work,
 the winner adds the next block and collects the reward, the reward **halves on
