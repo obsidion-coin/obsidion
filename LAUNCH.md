@@ -18,27 +18,32 @@ must be running the same published code everyone else will.
 
 **Identity is already set up.** This repository commits as
 `obsidioncoin-tech <312787066+obsidioncoin-tech@users.noreply.github.com>` —
-your GitHub account's noreply address, so no personal inbox enters public git
-history and commits still link to your profile. It is pinned in the repo's
-local git config, so future commits keep it automatically. Do not override it
-with `--author` or a global config, and never `git commit` here from a shell
-that sets a different email.
+the project account that owns the organisation, using its GitHub noreply
+address so no personal inbox enters public git history. It is pinned in the
+repo's local git config, so future commits keep it automatically. Do not
+override it with `--author` or a global config, and never `git commit` here
+from a shell that sets a different email.
+
+**Push as `obsidioncoin-tech`, not as a personal account.** That account is
+the organisation's only member, so Git Credential Manager authenticating as
+anyone else will be refused with a permission error that looks like the repo
+does not exist.
 
 Create the organisation at <https://github.com/organizations/plan> (choose the
-free plan), named **`obsidioncoin`**. Then:
+free plan), named **`obsidion-coin`**. Then:
 
 ```bash
-git remote add origin https://github.com/obsidioncoin/obsidion.git
+git remote add origin https://github.com/obsidion-coin/obsidion.git
 git push -u origin master
 ```
 
 Or in one step with the GitHub CLI, once the org exists:
 
 ```bash
-gh repo create obsidioncoin/obsidion --public --source=. --remote=origin --push
+gh repo create obsidion-coin/obsidion --public --source=. --remote=origin --push
 ```
 
-The result is `github.com/obsidioncoin/obsidion` — which is the URL that goes
+The result is `github.com/obsidion-coin/obsidion` — which is the URL that goes
 in the announcement, the explorer footer, and every seed server's clone
 command, so it should not change afterwards.
 
@@ -67,7 +72,7 @@ sudo apt update && sudo apt install -y python3 python3-venv git
 sudo useradd --system --create-home --home-dir /var/lib/obsidion obsidion
 sudo -u obsidion -H bash -c '
   cd /var/lib/obsidion
-  git clone https://github.com/obsidioncoin/obsidion.git
+  git clone https://github.com/obsidion-coin/obsidion.git
   cd obsidion
   python3 -m venv .venv
   .venv/bin/pip install ecdsa flask pytest

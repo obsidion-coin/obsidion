@@ -51,7 +51,7 @@ codebase that creates coins, and every node rejects a block that claims more.
 **Run it**
 
 ```
-git clone https://github.com/obsidioncoin/obsidion
+git clone https://github.com/obsidion-coin/obsidion
 cd obsidion
 python -m venv .venv && .venv/bin/pip install ecdsa flask
 .venv/bin/python -m obsidion.node --wallet my.wallet --create-wallet --mine
@@ -73,7 +73,7 @@ Python 3.11+. It finds the network by itself. There is a block explorer at
   Scarcity is not value. If you mine it, mine it because building a currency
   from nothing is an interesting thing to be part of.
 
-Code: https://github.com/obsidioncoin/obsidion
+Code: https://github.com/obsidion-coin/obsidion
 Explorer: [EXPLORER URL]
 Tests run on every commit across Linux, macOS and Windows.
 
