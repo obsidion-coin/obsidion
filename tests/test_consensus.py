@@ -85,7 +85,7 @@ def test_total_supply_never_exceeds_21_million():
 
 def test_total_supply_is_just_under_21_million():
     """Integer truncation at each halving puts the true cap fractionally below
-    the round number, exactly as Bitcoin's sits at 20,999,999.9769 BTC."""
+    the round number, at 20,999,999.9769 OBSD."""
     total = consensus.total_supply(MAINNET)
     assert 20_999_999 * COIN < total < 21_000_000 * COIN
 
@@ -120,7 +120,7 @@ def test_circulating_supply_converges_to_total_supply(params):
 
 def test_supply_at_the_first_halving_is_half_the_eventual_total():
     """Half of all OBSD that will ever exist is mined in the first era — the same
-    front-loaded emission curve Bitcoin has."""
+    front-loaded emission curve the halving schedule produces."""
     at_first_halving = consensus.circulating_supply(
         MAINNET.halving_interval - 1, MAINNET
     )
@@ -164,13 +164,14 @@ def test_compact_target_round_trips(bits):
 @pytest.mark.parametrize("bits, expected", [(0x00000000, 0), (0x01003456, 0)])
 def test_degenerate_encodings_decode_to_zero(bits, expected):
     """Some compact values shift their mantissa away entirely and mean zero.
-    They cannot round-trip, and matching Bitcoin's behaviour here matters — a
-    node that decoded them differently would accept blocks others reject."""
+    They cannot round-trip, and every node must decode them identically — one
+    that read them differently would accept blocks the rest of the network
+    rejects, and split off the chain."""
     assert compact_to_target(bits) == expected
 
 
 def test_known_compact_encoding():
-    """Bitcoin's original difficulty-1 target, a widely published value."""
+    """The difficulty-1 reference target, a widely published constant."""
     assert compact_to_target(0x1D00FFFF) == 0x00FFFF * 256 ** (0x1D - 3)
 
 

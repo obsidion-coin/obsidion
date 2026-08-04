@@ -26,10 +26,10 @@ from dataclasses import dataclass
 COIN_NAME = "Obsidion"
 TICKER = "OBSD"
 
-#: Name of the smallest indivisible unit, as "satoshi" is to Bitcoin.
+#: Name of the smallest indivisible unit. Obsidion has no fractions of a shard.
 SUBUNIT_NAME = "shard"
 
-#: Shards in one OBSD. Eight decimal places, matching Bitcoin's precision.
+#: Shards in one OBSD — eight decimal places of precision.
 #: All amounts everywhere in this codebase are integers in shards — never floats.
 #: Money and floating point must never meet.
 COIN = 100_000_000
@@ -106,8 +106,9 @@ class NetworkParams:
     # Genesis
     genesis_timestamp: int
     genesis_message: bytes
-    """Embedded in the genesis coinbase, as Bitcoin's carries a newspaper
-    headline. Proves the chain was not started earlier than this date."""
+    """Embedded in the genesis coinbase. Carrying a dated, externally
+    verifiable phrase proves the chain was not started before that date —
+    nobody can produce a genesis block predating the words inside it."""
 
     seed_nodes: tuple[tuple[str, int], ...] = ()
     """Addresses a fresh node dials to find the network.
@@ -148,9 +149,9 @@ class NetworkParams:
         """Theoretical maximum supply in shards.
 
         Note this is an upper bound, not the exact figure. Because each halving
-        uses integer division, the true total is fractionally lower — the same
-        reason Bitcoin's real cap is 20,999,999.9769 BTC rather than 21 million.
-        `consensus.total_supply()` computes the exact value.
+        uses integer division, the true total is fractionally lower — for the
+        default parameters it lands at 20,999,999.9769 rather than a round
+        21 million. `consensus.total_supply()` computes the exact value.
         """
         return self.initial_subsidy * self.halving_interval * 2
 

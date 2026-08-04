@@ -1,17 +1,18 @@
 # Obsidion (OBSD)
 
-A CPU-mineable, Bitcoin-style proof-of-work cryptocurrency, built from first
-principles in Python. Named for obsidian, the volcanic glass — forged under
-pressure, holding the sharpest edge of any natural material.
+A peer-to-peer digital currency secured by CPU-friendly proof-of-work, built
+from first principles in Python. Named for obsidian, the volcanic glass —
+forged under pressure, holding the sharpest edge of any natural material.
 
 **Obsidi*o*n, with an "o".** Not the note-taking app, not Obsidian
 Entertainment, and not the unrelated coin trading as ODN. Different project,
 different people, no connection to any of them.
 
-Obsidion works the way Bitcoin works: miners race to solve proof-of-work,
-the winner adds the next block and collects the reward, the reward **halves on
-a fixed schedule**, and total supply is **capped forever**. None of that is
-policy — it is enforced by every node's validation of every block.
+Miners race to solve proof-of-work; whoever wins adds the next block and
+collects the reward; the reward **halves on a fixed schedule**; and total
+supply is **capped forever**. None of that is policy — it is enforced by every
+node's validation of every block, which is what makes the scarcity provable
+rather than promised.
 
 | | |
 |---|---|
@@ -28,9 +29,10 @@ policy — it is enforced by every node's validation of every block.
 | Addresses | bech32: `obsd1q…` (mainnet), `tobsd1q…` (testnet) |
 | Genesis (mainnet) | `69e33674de2c169233dbbdca69dcd1ede122207cd7ead83c5564e08172862a7a` |
 
-Half of all OBSD that will ever exist mints in the first era. The true cap of
-20,999,999.9769 — a hair under 21M, because each halving truncates to whole
-shards — is bit-for-bit the same arithmetic Bitcoin arrives at.
+Half of all OBSD that will ever exist mints in the first era. The cap lands at
+20,999,999.9769 rather than a round 21 million because each halving is an
+integer right-shift: after nine of them the reward stops dividing evenly, and
+every subsequent era truncates a fraction of a shard that is never minted.
 
 **Why scrypt and not SHA-256.** Obsidion is meant to be mined on computers
 people already own. A SHA-256 ASIC is pure combinational logic and beats a CPU
@@ -208,8 +210,8 @@ Read this section before telling anyone this is money.
 - **RPC is unauthenticated localhost HTTP.** Anyone who can reach the port
   controls the wallet. Never expose it; tunnel over SSH for remote use.
 - **Pure-Python signature verification** (~ms per signature) caps realistic
-  throughput far below Bitcoin's. Fine for thousands of users; wrong for
-  millions.
+  throughput to roughly a few hundred transactions per second per core. Fine
+  for thousands of users; wrong for millions.
 - **No launch infrastructure.** Public release additionally needs seed nodes,
   packaged binaries with code signing, a fair-launch announcement (publish
   code + genesis before mining, or it is a stealth premine), and legal review

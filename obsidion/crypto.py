@@ -30,7 +30,7 @@ def sha256(data: bytes) -> bytes:
 
 
 def sha256d(data: bytes) -> bytes:
-    """Double SHA-256, the workhorse hash of Bitcoin and of Obsidion.
+    """Double SHA-256, the workhorse hash of Obsidion.
 
     Used for transaction ids, block hashes, merkle nodes and proof-of-work.
     Hashing twice defends against length-extension attacks on the raw
@@ -121,8 +121,9 @@ def pow_hash(header_bytes: bytes, algorithm: str = "scrypt-2mb") -> bytes:
 def hash_to_int(digest: bytes) -> int:
     """Interpret a hash as a little-endian integer, for comparison against a target.
 
-    Little-endian because that is how Bitcoin displays and compares block hashes,
-    and matching the convention avoids a whole class of subtle bugs.
+    Little-endian, and consistently so: every comparison against a target and
+    every displayed hash uses the same byte order. Mixing the two conventions
+    in one codebase is a whole class of subtle, hard-to-spot bugs.
     """
     return int.from_bytes(digest, "little")
 
@@ -156,8 +157,8 @@ def sign(private_key: bytes, digest: bytes) -> bytes:
 
     Signatures are canonicalised to low-S form so that a third party cannot take
     a valid signature, flip S, and produce a different-looking but still-valid
-    signature for the same transaction — the malleability bug that forced
-    Bitcoin's BIP-62 work.
+    signature for the same transaction — the malleability problem BIP-62
+    describes.
     """
     signing_key = SigningKey.from_string(private_key, curve=SECP256k1)
     return signing_key.sign_digest_deterministic(

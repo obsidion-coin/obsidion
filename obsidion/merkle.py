@@ -25,8 +25,8 @@ def _pair_hash(left: bytes, right: bytes) -> bytes:
 def merkle_root(txids: list[bytes]) -> bytes:
     """Compute the merkle root of a list of transaction ids.
 
-    Rows with an odd number of hashes duplicate their final entry, following
-    Bitcoin. That rule carries a subtle flaw (CVE-2012-2459): a list whose last
+    Rows with an odd number of hashes duplicate their final entry, which keeps
+    the tree binary. That rule carries a subtle flaw (CVE-2012-2459): a list whose last
     two hashes are already identical produces the same root as the shorter list
     without them. An attacker can exploit this to build a block that looks
     different but hashes identically, tricking nodes into permanently marking the

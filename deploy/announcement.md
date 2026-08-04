@@ -20,10 +20,10 @@ everyone else.
 app, and not the unrelated coin trading as ODN. Getting that out of the way
 first, because everyone asks.*
 
-**What it is.** A Bitcoin-style chain built from scratch in Python — UTXO
-ledger, secp256k1 signatures, proof-of-work mining, peer-to-peer gossip. Not a
-token on someone else's chain, and not a fork with the constants changed. It
-is about 8,500 lines you can read in an evening.
+**What it is.** A proof-of-work chain built from scratch in Python — UTXO
+ledger, secp256k1 signatures, peer-to-peer gossip, the lot. Not a token on
+someone else's chain, and not a fork of an existing one with the constants
+changed. It is about 8,500 lines you can read in an evening.
 
 **Why scrypt.** SHA-256 coins belong to whoever buys ASICs; a single
 second-hand unit out-hashes every CPU that would ever run a small chain, by a

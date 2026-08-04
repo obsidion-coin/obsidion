@@ -191,7 +191,7 @@ def test_background_miners_race_without_forking_forever(network):
 
     # Let in-flight blocks finish propagating. The race can end in a genuine
     # tie — two branches of equal cumulative work — which persists until the
-    # next block breaks it. That is correct Bitcoin behaviour, not a bug, so
+    # next block breaks it. That is correct proof-of-work behaviour, not a bug, so
     # the test does what reality does: someone mines one more block.
     time.sleep(1.0)
     b.generate(1)

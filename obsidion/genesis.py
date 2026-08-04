@@ -13,10 +13,10 @@ carry a subtly different one.
 
 **The genesis reward is unspendable.** Its output is locked to a hash of twenty
 zero bytes, and no public key hashes to that value. Those 50 OBSD can never
-move. This is deliberate: it means the chain begins with nobody holding
-anything, and the first spendable coin in existence is one somebody mined.
-Bitcoin's genesis reward is likewise unspendable, though there by accident of
-implementation rather than by design.
+move, and the supply figures reported by the explorer count them even though
+nobody can ever touch them. This is deliberate: the chain begins with nobody
+holding anything, and the first spendable coin in existence is one somebody
+mined.
 """
 
 from __future__ import annotations

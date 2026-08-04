@@ -6,15 +6,15 @@ earlier transactions and creates new ones, and a wallet's "balance" is simply th
 sum of the outputs it can unlock. Double-spending is then structurally visible: a
 UTXO either exists and can be spent once, or it does not exist.
 
-Two design decisions differ from Bitcoin's original design, both fixing problems
-Bitcoin later had to patch:
+Two design decisions here depart from the conventional approach, both closing
+problems that earlier systems had to patch after the fact:
 
-**Transaction ids exclude signatures.** Bitcoin's legacy txid covers the whole
+**Transaction ids exclude signatures.** The traditional txid covers the whole
 serialized transaction including signature bytes, so altering a signature's
-encoding changes the id without invalidating it — transaction malleability, which
-broke exchanges and forced the segwit redesign. Obsidion computes the id over the
-transaction with signature fields blank, so the id is fixed the moment the
-transaction is constructed.
+encoding changes the id without invalidating it — transaction malleability,
+which broke exchanges and forced a substantial protocol redesign elsewhere.
+Obsidion computes the id over the transaction with signature fields blank, so
+the id is fixed the moment the transaction is constructed.
 
 **Signatures commit to the amount being spent.** Following BIP-143, the digest
 includes the value of the output being consumed. Without this an attacker can lie
@@ -22,9 +22,9 @@ to an offline signer about how much it is spending and steal the difference as
 fee.
 
 Only one kind of output exists: pay-to-public-key-hash. There is no scripting
-language. That is a deliberate limitation — Bitcoin's script engine is the source
-of a large share of its consensus complexity, and Obsidion does not need it to
-be money.
+language. That is a deliberate limitation — a general script engine is the
+source of a large share of consensus complexity in the systems that have one,
+and Obsidion does not need it to be money.
 """
 
 from __future__ import annotations
@@ -58,7 +58,8 @@ MAX_COINBASE_DATA = 100
 
 
 def write_varint(value: int) -> bytes:
-    """Encode a non-negative integer compactly, Bitcoin-style."""
+    """Encode a non-negative integer compactly: one byte where it fits, then a
+    marker byte selecting a 2, 4 or 8-byte little-endian payload."""
     if value < 0:
         raise ValueError(f"varint cannot encode a negative value: {value}")
     if value < 0xFD:

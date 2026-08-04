@@ -28,7 +28,8 @@ from obsidion.transaction import Transaction
 
 HEADER_SIZE = 80
 
-#: Largest possible target, used to normalise difficulty into a human number.
+#: Reference target that difficulty is expressed relative to. Purely a scale
+#: for human-readable numbers — consensus never uses it, only the real target.
 MAX_TARGET = 0xFFFF * 256 ** (0x1D - 3)
 
 
@@ -83,8 +84,10 @@ def target_to_compact(target: int) -> int:
 def target_to_difficulty(target: int) -> float:
     """Express a target as a difficulty multiple, for humans.
 
-    Difficulty 1 is the easiest target Bitcoin ever used. Higher means harder.
-    This value is cosmetic — consensus always works with the target itself.
+    Difficulty 1 corresponds to `MAX_TARGET`; higher numbers mean harder. The
+    value is cosmetic — consensus always works with the target itself, and this
+    exists only so that "difficulty 4,096" is easier to read than a 256-bit
+    integer.
     """
     if target <= 0:
         return float("inf")

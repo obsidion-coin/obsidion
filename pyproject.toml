@@ -1,7 +1,7 @@
 [project]
 name = "obsidion"
 version = "0.1.0"
-description = "Obsidion (OBSD) — a CPU-mineable, Bitcoin-style proof-of-work cryptocurrency"
+description = "Obsidion (OBSD) — a peer-to-peer digital currency secured by CPU-friendly proof-of-work"
 requires-python = ">=3.11"
 dependencies = [
     "ecdsa>=0.19",

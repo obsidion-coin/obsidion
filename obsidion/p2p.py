@@ -1,7 +1,7 @@
 """Peer-to-peer networking: how Obsidion nodes find each other and agree.
 
-The protocol is deliberately small — nine message types over TCP, framed the
-way Bitcoin frames them:
+The protocol is deliberately small — nine message types over TCP, each framed
+identically:
 
     [4B network magic][12B command][4B length][4B checksum][payload]
 
@@ -27,9 +27,9 @@ it is news to them. Data therefore floods the network in one direction, once.
 Sync uses a *block locator*: exponentially spaced hashes from my tip back to
 genesis. The peer finds the latest one on its own chain — the fork point — and
 answers with what comes after. A few dozen hashes locate a fork in a chain of
-any length. (Bitcoin Core now syncs headers-first to resist bandwidth-wasting
-attacks; at Obsidion's scale the locator protocol is the same behaviour with
-far less machinery, and the full validation of every block is identical.)
+any length. (A headers-first sync resists bandwidth-wasting attacks better at
+large scale; at Obsidion's size the locator exchange gets the same result with
+far less machinery, and every block is fully validated either way.)
 
 Peers are scored, not trusted: invalid blocks or malformed framing add to a
 misbehaviour score, and 100 points bans the address for the session. An honest
@@ -73,9 +73,9 @@ MAX_LOCATOR = 64
 #: peer can consume by announcing blocks it never intends to deliver.
 MAX_OUTSTANDING_BLOCKS = 2 * MAX_INV
 
-#: Outbound connections a node tries to keep open. Bitcoin uses eight for the
-#: same reason: enough that losing a few peers is survivable, few enough that
-#: the network is not a mesh.
+#: Outbound connections a node tries to keep open. Enough that losing a few
+#: peers is survivable, few enough that the network does not become a mesh
+#: where every node carries every other node's traffic.
 TARGET_OUTBOUND = 8
 
 #: Seconds between rounds of connection upkeep.

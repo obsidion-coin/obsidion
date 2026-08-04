@@ -53,8 +53,9 @@ def subsidy(height: int, params: NetworkParams) -> int:
         return 0
 
     # Integer right-shift, not division by two. Truncation is deliberate and is
-    # why the true cap sits fractionally under the round number — the same
-    # reason Bitcoin's real limit is 20,999,999.9769 BTC rather than 21 million.
+    # why the true cap sits fractionally under the round number: 50 OBSD in
+    # shards is 5 x 10^9, which carries only nine factors of two, so from the
+    # tenth halving onward each era discards a remainder that is never minted.
     return params.initial_subsidy >> halvings
 
 

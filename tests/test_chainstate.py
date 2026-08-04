@@ -353,7 +353,8 @@ def test_two_transactions_cannot_spend_the_same_output_in_one_block(chain):
 
 def test_a_chain_of_spends_within_one_block_connects(chain):
     """Transaction B may spend transaction A's output in the same block,
-    provided A comes first — exactly as in Bitcoin."""
+    provided A comes first. Connection processes transactions in order, so an
+    output exists the moment its transaction is applied."""
     reward_block = build_child(chain, miner=ALICE)
     add(chain, reward_block)
     mine_to(chain, MINER, 1)
