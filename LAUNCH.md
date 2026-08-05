@@ -52,7 +52,7 @@ time. Once it is public it is cloned, mirrored and indexed within hours, and
 nothing is recallable.
 
 The repository already contains `LICENSE` (MIT), a CI workflow that runs all
-350 tests on Linux, Windows and macOS, and a README that states the known
+359 tests on Linux, Windows and macOS, and a README that states the known
 limitations plainly. Leave that section in. A project that names its own weak
 points is trusted more than one that does not, and everything in it is
 discoverable anyway.
@@ -151,9 +151,14 @@ On one seed server:
     --network mainnet --host 0.0.0.0 --port 8080
 ```
 
-Put nginx and a Let's Encrypt certificate in front of it. People believe a
-chain they can see. The halving countdown is the thing they will come back to
-look at.
+The explorer needs the node's RPC token, so pass the same `--datadir` the
+node uses. Put nginx and a Let's Encrypt certificate in front of it. People
+believe a chain they can see, and the halving countdown is what they come back
+to look at.
+
+Note the explorer is a read-only RPC client, but it runs with a token that can
+spend. Keep it on the same host as the node, behind loopback, and let nginx be
+the only thing facing the internet.
 
 ---
 

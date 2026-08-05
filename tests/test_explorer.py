@@ -15,11 +15,12 @@ from obsidion.wallet import Wallet
 def stack(tmp_path):
     wallet = Wallet.create(tmp_path / "explorer.wallet", "pw", REGTEST)
     node = ObsidionNode(REGTEST, wallet=wallet)
-    rpc = RPCServer(node)
+    rpc = RPCServer(node, datadir=tmp_path)
     node.start()
     rpc.start()
 
-    client = create_app(rpc.port).test_client()
+    # The explorer authenticates like any other client.
+    client = create_app(rpc.port, rpc.token).test_client()
     yield node, rpc, client
 
     rpc.stop()

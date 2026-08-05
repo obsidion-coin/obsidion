@@ -1,10 +1,27 @@
 """JSON-RPC over HTTP: the node's control surface.
 
 Everything that talks to a running node — the CLI, the block explorer, a
-future GUI — talks through here. The protocol is JSON-RPC 2.0 over plain HTTP
-POST, bound to localhost only: whoever can reach the port controls the wallet,
-so the port must not be reachable from anywhere else. (Remote management wants
-an SSH tunnel, not an exposed RPC socket.)
+future GUI — talks through here. The protocol is JSON-RPC 2.0 over HTTP POST,
+bound to loopback, and this endpoint controls the wallet: anything that can
+successfully call it can spend your coins.
+
+**Binding to localhost is not, by itself, a defence.** A web page you merely
+visit can make your own browser POST to 127.0.0.1 — no exploit needed, that is
+ordinary cross-origin behaviour. Without further checks such a page can call
+`send` and drain the wallet of anyone who happened to be running a node. This
+was a live hole here, demonstrated before it was closed.
+
+Three independent defences, so no single mistake reopens it:
+
+1. **A cookie.** A fresh random token is written to `<datadir>/.rpccookie` at
+   start-up and required on every request. A web page cannot read a local file,
+   so it cannot produce the token.
+2. **Origin rejection.** Any request carrying `Origin` or `Referer` is refused
+   outright. Browsers always attach those cross-origin; a CLI never does. This
+   holds even if a cookie somehow leaks.
+3. **A JSON content type.** A browser cannot set `Content-Type:
+   application/json` cross-origin without a CORS preflight, which this server
+   never approves.
 
 Amounts cross this boundary as *strings* ("12.50000000"), never JSON floats.
 Floats cannot represent most decimal fractions exactly, and a wallet that
@@ -14,11 +31,16 @@ through Decimal into integer shards, exactly.
 
 from __future__ import annotations
 
+import hmac
+import ipaddress
 import json
 import logging
+import os
+import secrets
 import threading
 from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from obsidion import consensus, crypto
 from obsidion.block import compact_to_target, target_to_difficulty
@@ -54,19 +76,114 @@ def parse_amount(value) -> int:
     return int(shards)
 
 
+COOKIE_FILENAME = ".rpccookie"
+
+#: Largest request body accepted, so a local process cannot exhaust memory.
+MAX_REQUEST_BYTES = 1_000_000
+
+
+def read_cookie(datadir: str | Path) -> str:
+    """Read the auth token a running node wrote to its data directory.
+
+    Clients call this; it is the whole of the authentication scheme from their
+    side. Raises FileNotFoundError if no node has started, which is the honest
+    answer to "why can I not connect".
+    """
+    return Path(datadir).joinpath(COOKIE_FILENAME).read_text().strip()
+
+
+def _is_loopback(host: str) -> bool:
+    if host in ("localhost", ""):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 class RPCServer:
     """A small threading HTTP server exposing the node's methods."""
 
-    def __init__(self, node, host: str = "127.0.0.1", port: int = 0):
+    def __init__(
+        self,
+        node,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        datadir: str | Path | None = None,
+        allow_remote: bool = False,
+    ):
+        if not _is_loopback(host) and not allow_remote:
+            raise ValueError(
+                f"refusing to bind the wallet RPC to {host!r}, which is reachable "
+                "from outside this machine. Anything that can reach this port can "
+                "spend your coins. Use an SSH tunnel for remote access, or pass "
+                "allow_remote=True (--rpc-allow-remote) if you genuinely mean it."
+            )
+
         self.node = node
+        self.datadir = Path(datadir) if datadir is not None else None
+        #: Fresh every start, so a leaked or stale cookie stops working.
+        self.token = secrets.token_hex(32)
+        self._write_cookie()
+
         methods = self  # for the handler closure
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):  # quiet; the node has its own logs
                 pass
 
+            def _refuse(self, status: int, message: str) -> None:
+                payload = json.dumps(
+                    {"result": None, "error": {"code": -32600, "message": message},
+                     "id": None}
+                ).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
             def do_POST(self) -> None:
+                # A browser attaches these cross-origin and a command-line
+                # client never does, so their mere presence identifies a
+                # request this endpoint should not be serving.
+                for header in ("Origin", "Referer"):
+                    if self.headers.get(header):
+                        log.warning(
+                            "refused an RPC request carrying %s: %r",
+                            header,
+                            self.headers.get(header),
+                        )
+                        self._refuse(
+                            403,
+                            f"requests carrying an {header} header are refused; "
+                            "this endpoint is not for browsers",
+                        )
+                        return
+
+                content_type = (self.headers.get("Content-Type") or "").split(";")[0]
+                if content_type.strip().lower() != "application/json":
+                    self._refuse(
+                        415, "Content-Type must be application/json"
+                    )
+                    return
+
+                supplied = (self.headers.get("Authorization") or "").removeprefix(
+                    "Bearer "
+                )
+                if not hmac.compare_digest(supplied, methods.token):
+                    self._refuse(
+                        401,
+                        "missing or invalid RPC token; it is written to "
+                        f"{COOKIE_FILENAME} in the node's data directory",
+                    )
+                    return
+
                 length = int(self.headers.get("Content-Length", 0))
+                if length > MAX_REQUEST_BYTES:
+                    self._refuse(413, "request body too large")
+                    return
+
                 body = self.rfile.read(length)
                 response = methods._handle(body)
                 payload = json.dumps(response).encode()
@@ -80,6 +197,19 @@ class RPCServer:
         self.port = self.httpd.server_address[1]
         self._thread: threading.Thread | None = None
 
+    def _write_cookie(self) -> None:
+        """Publish the token where local clients — and only local clients —
+        can read it. A remote attacker cannot read a file on your disk."""
+        if self.datadir is None:
+            return
+        self.datadir.mkdir(parents=True, exist_ok=True)
+        path = self.datadir / COOKIE_FILENAME
+        path.write_text(self.token)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:  # pragma: no cover — best effort on exotic filesystems
+            pass
+
     def start(self) -> None:
         self._thread = threading.Thread(
             target=self.httpd.serve_forever, name="obsidion-rpc", daemon=True
@@ -87,10 +217,18 @@ class RPCServer:
         self._thread.start()
 
     def stop(self) -> None:
-        self.httpd.shutdown()
-        self.httpd.server_close()
+        # shutdown() waits for serve_forever() to return, so calling it on a
+        # server that was never started blocks forever. Only signal a loop that
+        # is actually running.
         if self._thread is not None:
+            self.httpd.shutdown()
             self._thread.join(timeout=5)
+            self._thread = None
+        self.httpd.server_close()
+        # Leaving a token on disk after the node exits invites a client to
+        # believe it is still valid. It is not — a restart mints a new one.
+        if self.datadir is not None:
+            (self.datadir / COOKIE_FILENAME).unlink(missing_ok=True)
 
     # -------------------------------------------------------------- dispatch
 

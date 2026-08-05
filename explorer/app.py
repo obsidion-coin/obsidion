@@ -20,19 +20,24 @@ import json
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 
 from flask import Flask, abort, redirect, render_template_string, request
 
 from obsidion.params import COIN_NAME, TICKER, get_network
+from obsidion.rpc import read_cookie
 
 
-def rpc(port: int, method: str, *params):
+def rpc(port: int, method: str, *params, token: str = ""):
     body = json.dumps({"method": method, "params": list(params), "id": 1}).encode()
     with urllib.request.urlopen(
         urllib.request.Request(
             f"http://127.0.0.1:{port}/",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
         ),
         timeout=30,
     ) as response:
@@ -266,8 +271,12 @@ def _halving_text(info: dict) -> str:
     return f"{remaining} blocks ({estimate})"
 
 
-def create_app(rpc_port: int) -> Flask:
+def create_app(rpc_port: int, token: str = "") -> Flask:
     app = Flask(__name__)
+
+    def call(method, *params):
+        """Every RPC the explorer makes, carrying the node's auth token."""
+        return rpc(rpc_port, method, *params, token=token)
 
     def page(title: str, template: str, refresh: bool = False, **context) -> str:
         body = render_template_string(template, ticker=TICKER, **context)
@@ -277,10 +286,10 @@ def create_app(rpc_port: int) -> Flask:
 
     @app.get("/")
     def dashboard():
-        info = rpc(rpc_port, "getinfo")
+        info = call("getinfo")
         blocks = []
         for height in range(info["height"], max(-1, info["height"] - 15), -1):
-            block = rpc(rpc_port, "getblock", rpc(rpc_port, "getblockhash", height))
+            block = call("getblock", call("getblockhash", height))
             block["age"] = _age(block["time"])
             blocks.append(block)
         return page(
@@ -295,7 +304,7 @@ def create_app(rpc_port: int) -> Flask:
     @app.get("/block/<hash_hex>")
     def block_page(hash_hex: str):
         try:
-            block = rpc(rpc_port, "getblock", hash_hex)
+            block = call("getblock", hash_hex)
         except LookupError:
             abort(404)
         stamp = datetime.fromtimestamp(block["time"], tz=timezone.utc)
@@ -309,7 +318,7 @@ def create_app(rpc_port: int) -> Flask:
     @app.get("/tx/<txid>")
     def tx_page(txid: str):
         try:
-            tx = rpc(rpc_port, "gettransaction", txid)
+            tx = call("gettransaction", txid)
         except LookupError:
             abort(404)
         return page(f"tx {txid[:16]}…", TX_PAGE, tx=tx)
@@ -317,7 +326,7 @@ def create_app(rpc_port: int) -> Flask:
     @app.get("/address/<address>")
     def address_page(address: str):
         try:
-            info = rpc(rpc_port, "getaddressutxos", address)
+            info = call("getaddressutxos", address)
         except LookupError:
             abort(404)
         return page(address[:24], ADDRESS_PAGE, info=info)
@@ -328,13 +337,13 @@ def create_app(rpc_port: int) -> Flask:
         if query.isdigit():
             try:
                 return redirect(
-                    f"/block/{rpc(rpc_port, 'getblockhash', int(query))}"
+                    f"/block/{call('getblockhash', int(query))}"
                 )
             except LookupError:
                 abort(404)
         if len(query) == 64:
             try:
-                rpc(rpc_port, "getblock", query)
+                call("getblock", query)
                 return redirect(f"/block/{query}")
             except LookupError:
                 return redirect(f"/tx/{query}")
@@ -352,6 +361,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--network", default="mainnet")
     parser.add_argument("--rpc-port", type=int, default=None)
+    parser.add_argument(
+        "--datadir",
+        default=str(Path.home() / ".obsidion"),
+        help="where the node wrote its RPC token; must match the node's --datadir",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args(argv)
@@ -361,7 +375,15 @@ def main(argv: list[str] | None = None) -> None:
         if args.rpc_port is not None
         else get_network(args.network).default_rpc_port
     )
-    create_app(rpc_port).run(host=args.host, port=args.port)
+    try:
+        token = read_cookie(args.datadir)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"no RPC token in {args.datadir} — start obsidion-node first, and "
+            "point --datadir at the same directory it uses."
+        ) from None
+
+    create_app(rpc_port, token).run(host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

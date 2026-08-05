@@ -237,6 +237,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=None, help="P2P listen port")
     parser.add_argument("--rpc-port", type=int, default=None)
     parser.add_argument(
+        "--rpc-host",
+        default="127.0.0.1",
+        help="RPC listen address; loopback unless --rpc-allow-remote is given",
+    )
+    parser.add_argument(
+        "--rpc-allow-remote",
+        action="store_true",
+        help="permit binding the wallet RPC off-loopback (you almost certainly "
+        "want an SSH tunnel instead)",
+    )
+    parser.add_argument(
         "--connect",
         action="append",
         default=[],
@@ -284,7 +295,10 @@ def main(argv: list[str] | None = None) -> None:
 
     rpc = RPCServer(
         node,
+        host=args.rpc_host,
         port=args.rpc_port if args.rpc_port is not None else params.default_rpc_port,
+        datadir=args.datadir,
+        allow_remote=args.rpc_allow_remote,
     )
 
     node.start()

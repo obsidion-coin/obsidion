@@ -7,6 +7,7 @@ socket, JSON, and thread boundaries that obsidion-cli uses.
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 
 import pytest
@@ -22,7 +23,7 @@ def stack(tmp_path):
     """A started node with a wallet and an RPC server, torn down afterwards."""
     wallet = Wallet.create(tmp_path / "node.wallet", "pw", REGTEST)
     node = ObsidionNode(REGTEST, wallet=wallet)
-    rpc = RPCServer(node)
+    rpc = RPCServer(node, datadir=tmp_path)
     node.start()
     rpc.start()
     yield node, rpc
@@ -30,17 +31,31 @@ def stack(tmp_path):
     node.stop()
 
 
-def call(rpc: RPCServer, method: str, *params):
+def call(rpc: RPCServer, method: str, *params, token=None, headers=None):
+    """Make an RPC request. Defaults to a well-formed, authenticated one;
+    `token` and `headers` let a test misbehave deliberately."""
     request = json.dumps({"method": method, "params": list(params), "id": 7}).encode()
+    sent = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {rpc.token if token is None else token}",
+    }
+    sent.update(headers or {})
     with urllib.request.urlopen(
         urllib.request.Request(
-            f"http://127.0.0.1:{rpc.port}/",
-            data=request,
-            headers={"Content-Type": "application/json"},
+            f"http://127.0.0.1:{rpc.port}/", data=request, headers=sent
         ),
         timeout=30,
     ) as response:
         return json.loads(response.read())
+
+
+def status_of(rpc: RPCServer, method: str, *params, token=None, headers=None) -> int:
+    """The HTTP status a request comes back with, for the rejection paths."""
+    try:
+        call(rpc, method, *params, token=token, headers=headers)
+        return 200
+    except urllib.error.HTTPError as exc:
+        return exc.code
 
 
 def result(rpc, method, *params):
@@ -156,6 +171,121 @@ def test_mining_can_be_started_and_stopped_over_rpc(stack):
 
     assert result(rpc, "stopmining") == "mining stopped"
     assert result(rpc, "getinfo")["mining"] is False
+
+
+# --------------------------------------------------------------------------
+# Access control
+#
+# This endpoint spends money. Everything below is a regression test for a real
+# vulnerability: the server originally had no authentication at all, and a web
+# page the operator merely visited could POST to 127.0.0.1 and drain the
+# wallet. Localhost is not a boundary against a browser.
+# --------------------------------------------------------------------------
+
+
+def test_a_request_without_a_token_is_refused(stack):
+    node, rpc = stack
+    assert status_of(rpc, "getinfo", token="") == 401
+
+
+def test_a_request_with_the_wrong_token_is_refused(stack):
+    node, rpc = stack
+    assert status_of(rpc, "getinfo", token="0" * 64) == 401
+
+
+def test_an_unauthenticated_request_cannot_move_money(stack):
+    """The attack itself: no token, and the wallet must be untouched after."""
+    node, rpc = stack
+    result(rpc, "generate", 1 + REGTEST.coinbase_maturity)
+    before = result(rpc, "getbalance")["spendable"]
+
+    recipient = Wallet(REGTEST, [b"\x55" * 32]).addresses()[0]
+    assert status_of(rpc, "send", recipient, "10", token="") == 401
+
+    assert result(rpc, "getbalance")["spendable"] == before
+
+
+def test_a_browser_request_is_refused_even_with_a_valid_token(stack):
+    """The defence that does not depend on the token staying secret.
+
+    Browsers attach Origin to cross-origin requests and cannot suppress it.
+    A command-line client never sends one. Refusing anything that carries it
+    blocks the web-page attack outright.
+    """
+    node, rpc = stack
+    assert (
+        status_of(rpc, "getinfo", headers={"Origin": "https://evil.example"}) == 403
+    )
+    assert (
+        status_of(rpc, "getinfo", headers={"Referer": "https://evil.example/x"}) == 403
+    )
+
+
+def test_a_browser_simple_request_content_type_is_refused(stack):
+    """text/plain is what a page uses to dodge the CORS preflight. It must not
+    be a way in, token or no token."""
+    node, rpc = stack
+    assert (
+        status_of(rpc, "getinfo", headers={"Content-Type": "text/plain"}) == 415
+    )
+
+
+def test_the_cookie_file_is_written_and_matches_the_server(tmp_path):
+    from obsidion.rpc import COOKIE_FILENAME, read_cookie
+
+    wallet = Wallet.create(tmp_path / "c.wallet", "pw", REGTEST)
+    node = ObsidionNode(REGTEST, wallet=wallet)
+    rpc = RPCServer(node, datadir=tmp_path)
+    try:
+        assert read_cookie(tmp_path) == rpc.token
+        assert len(rpc.token) == 64
+    finally:
+        rpc.stop()
+        node.stop()
+
+    # Stopping removes it, so nothing stale is left implying it still works.
+    assert not (tmp_path / COOKIE_FILENAME).exists()
+
+
+def test_two_nodes_get_different_tokens(tmp_path):
+    """A token is per-run, so one leaking never unlocks another node."""
+    tokens = []
+    for name in ("a", "b"):
+        directory = tmp_path / name
+        directory.mkdir()
+        wallet = Wallet.create(directory / "w.wallet", "pw", REGTEST)
+        node = ObsidionNode(REGTEST, wallet=wallet)
+        rpc = RPCServer(node, datadir=directory)
+        tokens.append(rpc.token)
+        rpc.stop()
+        node.stop()
+
+    assert tokens[0] != tokens[1]
+
+
+def test_binding_the_wallet_rpc_off_loopback_is_refused(tmp_path):
+    """Exposing this port to a network exposes the wallet. It should take more
+    than a typo."""
+    wallet = Wallet.create(tmp_path / "b.wallet", "pw", REGTEST)
+    node = ObsidionNode(REGTEST, wallet=wallet)
+    try:
+        with pytest.raises(ValueError, match="refusing to bind"):
+            RPCServer(node, host="0.0.0.0", datadir=tmp_path)
+    finally:
+        node.stop()
+
+
+def test_binding_off_loopback_is_possible_when_explicitly_demanded(tmp_path):
+    wallet = Wallet.create(tmp_path / "d.wallet", "pw", REGTEST)
+    node = ObsidionNode(REGTEST, wallet=wallet)
+    rpc = None
+    try:
+        rpc = RPCServer(node, host="0.0.0.0", datadir=tmp_path, allow_remote=True)
+        assert rpc.port > 0
+    finally:
+        if rpc is not None:
+            rpc.stop()
+        node.stop()
 
 
 def test_unknown_methods_are_refused_not_crashed(stack):

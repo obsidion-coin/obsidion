@@ -107,6 +107,26 @@ mempool and are re-mined.
 The wallet password can be supplied via the `OBSIDION_WALLET_PASSWORD`
 environment variable for unattended nodes; otherwise you are prompted.
 
+### Running at home
+
+**You do not need to accept incoming connections to take part.** An
+outbound-only node syncs, validates, mines and broadcasts like any other — it
+simply never lets strangers initiate contact with your machine:
+
+```
+python -m obsidion.node --host 127.0.0.1 --wallet my.wallet --create-wallet --mine
+```
+
+A machine behind an ordinary router with no port forwarding is already
+effectively outbound-only. Prefer running reachable, listening nodes on a
+rented server rather than on a computer that holds anything you care about.
+
+The RPC port controls the wallet. It is authenticated with a token written to
+`.rpccookie` in the data directory, refuses anything carrying a browser
+`Origin` header, and will not bind off-loopback without an explicit override.
+See **[SECURITY.md](SECURITY.md)** for the full threat model — what a peer can
+and cannot do to you, and why.
+
 ## Architecture
 
 ```
