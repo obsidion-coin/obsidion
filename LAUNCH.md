@@ -13,7 +13,7 @@ say so. A fair launch is the only launch you get one shot at.
 
 ## Step 1 — Publish the code (30 minutes, free)
 
-Nothing else can happen first, because the seed nodes you are about to run
+Nothing else can happen first, because the seed node you are about to run
 must be running the same published code everyone else will.
 
 **Identity is already set up.** This repository commits as
@@ -57,15 +57,64 @@ limitations plainly. Leave that section in. A project that names its own weak
 points is trusted more than one that does not, and everything in it is
 discoverable anyway.
 
-## Step 2 — Stand up two seed nodes (1 hour, ~$10/month)
+## Step 2 — Stand up a seed node (1 hour, free)
 
-A new node needs someone to call. Two, on **different providers** — Hetzner
-and DigitalOcean, or Vultr and Linode. Two nodes at one provider share one
-outage.
+A new node needs someone to call. Without a reachable seed you can announce to
+an audience that then cannot join.
 
-The cheapest tier is enough: 1 vCPU, 1 GB RAM, 20 GB disk.
+**This costs nothing.** Oracle Cloud's Always Free tier includes a permanent
+VM with a public IP — not a twelve-month trial. Google Cloud's free `e2-micro`
+is a workable second choice; watch its 1 GB/month egress allowance, which
+bills rather than stops.
 
-On each server:
+One seed is enough to launch. Two, on different providers, is better — a
+network whose only seed is offline is a network nobody new can join.
+
+### Creating the instance
+
+At <https://cloud.oracle.com>, create a **Compute instance**:
+
+- **Shape:** `VM.Standard.E2.1.Micro` (AMD, 1 GB). Almost always available.
+  The ARM `VM.Standard.A1.Flex` shapes are far more generous and frequently
+  **out of capacity** in busy regions — that error is normal and not something
+  you did wrong. Take the AMD micro and move on.
+- **Image:** Canonical Ubuntu (22.04 or 24.04).
+- **SSH keys:** save the private key Oracle offers; it is the only way in.
+
+### Opening the port — the step that traps everyone
+
+**Oracle has two independent firewalls, and you must open port 9444 in both.**
+Miss either and the node runs perfectly, logs look healthy, and nobody in the
+world can reach it.
+
+**First, the Virtual Cloud Network security list** (in the console):
+Networking → Virtual Cloud Networks → your VCN → Security Lists → Default →
+**Add Ingress Rule**:
+
+```
+Source CIDR:      0.0.0.0/0
+IP Protocol:      TCP
+Destination Port: 9444
+```
+
+**Second, the instance's own firewall.** Oracle's Ubuntu images ship
+`iptables` rules that drop everything, regardless of `ufw`:
+
+```bash
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 9444 -j ACCEPT
+sudo netfilter-persistent save
+```
+
+If `ufw` is active, allow it there too:
+
+```bash
+sudo ufw allow 9444/tcp
+```
+
+**Open only 9444.** The wallet RPC stays on loopback and must never be
+exposed — see `SECURITY.md`; use an SSH tunnel if you need it remotely.
+
+### Installing the node
 
 ```bash
 sudo apt update && sudo apt install -y python3 python3-venv git
@@ -88,7 +137,6 @@ sudo chmod 600 /etc/obsidion/password
 sudo cp /var/lib/obsidion/obsidion/deploy/obsidion.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now obsidion
-sudo ufw allow 9444/tcp
 ```
 
 Check it came up:
@@ -100,6 +148,32 @@ sudo journalctl -u obsidion -n 20
 **Do not pass `--mine` yet.** These nodes should relay, not mine, until the
 announced start time.
 
+### Confirm it from somewhere else
+
+```bash
+python deploy/preflight.py <public-ip>:9444
+```
+
+**Run this from your laptop, never from the server.** A machine can always
+reach itself, so checking locally proves nothing at all about either firewall.
+This is the only test that shows the outside world can get in.
+
+### Two notes on free tiers
+
+Oracle may reclaim Always Free compute that sits genuinely idle. A running
+node is not idle, but a seed disappearing is precisely the failure that stops
+new people joining, so check on it occasionally.
+
+If you ever lose the VM, a spare machine at home works as a fallback, because
+**`seed_nodes` accepts hostnames as well as IP addresses** — verified by
+`tests/test_integration.py::test_a_seed_may_be_a_hostname_rather_than_an_ip`.
+Register a free DuckDNS name, point it at your home connection, forward port
+9444, and put `yourname.duckdns.org:9444` in `seed_nodes`.
+
+That path has real costs: your home IP becomes public, and a listening service
+sits on your home network. Use a machine that holds nothing you care about —
+an old laptop or a Raspberry Pi — **never your main computer.**
+
 ## Step 3 — Bake the seed addresses in (10 minutes)
 
 Edit `obsidion/params.py`, in `MAINNET`:
@@ -108,7 +182,7 @@ Edit `obsidion/params.py`, in `MAINNET`:
     seed_nodes=("203.0.113.10:9444", "198.51.100.20:9444"),
 ```
 
-Commit, push, and **redeploy both servers** (`git pull && sudo systemctl
+Commit, push, and **redeploy the seed** (`git pull && sudo systemctl
 restart obsidion`) so they run the same code as everyone else.
 
 From your own machine, prove a stranger can join:
@@ -139,8 +213,15 @@ Include:
 - **2.5-minute blocks, 50 OBSD, halving every 210,000 blocks (~1 year),
   capped at 20,999,999.9769.**
 
-At the announced time, add `--mine` to the seed nodes' service file (or start
-mining on your own machine) — no earlier.
+At the announced time, start mining on your own machine — no earlier:
+
+```bash
+python -m obsidion.node --network mainnet --wallet my.wallet --create-wallet     --host 127.0.0.1 --mine
+```
+
+Note `--host 127.0.0.1`: your miner makes outbound connections only and never
+accepts inbound, so mining at home exposes nothing. The seed handles inbound
+for the network.
 
 ## Step 5 — A public explorer (30 minutes, optional but worth it)
 

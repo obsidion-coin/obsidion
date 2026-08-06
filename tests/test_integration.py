@@ -174,6 +174,47 @@ def test_a_stranger_joins_the_network_knowing_only_the_seeds(tmp_path):
         seed.stop()
 
 
+def test_a_seed_may_be_a_hostname_rather_than_an_ip(tmp_path):
+    """Seeds resolve through DNS, so a name works where an address would.
+
+    This matters for anyone without a static IP: a free dynamic-DNS hostname
+    can go into `seed_nodes` directly. Nothing on the seed path parses or
+    validates an address — `node.py` splits on the last colon and hands the
+    rest to `asyncio.open_connection`, which resolves. Asserted here so a later
+    refactor cannot quietly remove the capability.
+    """
+    from dataclasses import replace
+
+    seed_wallet = Wallet.create(tmp_path / "h-seed.wallet", "pw", REGTEST)
+    seed = ObsidionNode(REGTEST, wallet=seed_wallet)
+    seed.start()
+
+    try:
+        seed.generate(3)
+
+        # "localhost" must be resolved, not parsed — the whole point.
+        published = replace(REGTEST, seed_nodes=(f"localhost:{seed.p2p.port}",))
+        host, _, port = published.seed_nodes[0].rpartition(":")
+        assert host == "localhost", "the hostname must survive parsing intact"
+
+        joiner_wallet = Wallet.create(tmp_path / "h-join.wallet", "pw", published)
+        joiner = ObsidionNode(
+            published, wallet=joiner_wallet, seeds=[(host, int(port))]
+        )
+        joiner.start()
+
+        try:
+            wait_until(
+                lambda: height(joiner) == 3,
+                what="a node syncing from a seed named by hostname",
+            )
+            assert tip(joiner) == tip(seed)
+        finally:
+            joiner.stop()
+    finally:
+        seed.stop()
+
+
 def test_background_miners_race_without_forking_forever(network):
     """A and C both mine with real miner threads for a few seconds — a genuine
     race, blocks colliding, the works. When the dust settles, all three nodes

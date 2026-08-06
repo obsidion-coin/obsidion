@@ -148,7 +148,7 @@ obsidion/
   cli.py         command-line client                       → obsidion-cli
 explorer/
   app.py         Flask explorer, speaks only RPC           → obsidion-explorer
-tests/           343 tests, unit through three-node integration
+tests/           360 tests, unit through three-node integration
 ```
 
 Design rules that hold everywhere:
@@ -232,7 +232,8 @@ Read this section before telling anyone this is money.
 - **Pure-Python signature verification** (~ms per signature) caps realistic
   throughput to roughly a few hundred transactions per second per core. Fine
   for thousands of users; wrong for millions.
-- **No launch infrastructure.** Public release additionally needs seed nodes,
+- **No launch infrastructure.** Public release additionally needs a seed node
+  (free on Oracle Cloud's Always Free tier — see [LAUNCH.md](LAUNCH.md)),
   packaged binaries with code signing, a fair-launch announcement (publish
   code + genesis before mining, or it is a stealth premine), and legal review
   of how coins are distributed. None of that is code.
