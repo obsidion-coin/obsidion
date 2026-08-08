@@ -77,10 +77,14 @@ At <https://cloud.digitalocean.com> → **Create → Droplet**:
 - **Size:** Basic → Regular → **$6/mo** (1 GB RAM, 1 vCPU, 25 GB SSD). The
   $4 tier also works; the extra dollar buys headroom against the mempool bound.
 - **Region:** anywhere near you
-- **Authentication:** SSH key or password, either is fine
+- **Authentication:** SSH key, or a root password — if you choose password,
+  **actually type one**. Leaving the field empty still creates the droplet, and
+  sshd then closes every connection instantly with no prompt, because root has
+  no usable credential. Recover with the Web Console button on the droplet
+  page, which bypasses SSH entirely, then run `passwd`.
 
-New accounts get $200 of credit for 60 days, so this is free through launch
-and well beyond; it bills $6/month afterwards.
+A direct signup credits $5; the $200/60-day offer comes via referral links.
+Budget for $6/month.
 
 ### Opening the port
 
@@ -128,12 +132,6 @@ sudo -u obsidion -H bash -c '
   .venv/bin/python -m pytest -q          # confirm it passes here too
 '
 
-sudo mkdir -p /etc/obsidion
-printf 'OBSIDION_WALLET_PASSWORD=%s' 'a-long-random-password' \
-  | sudo tee /etc/obsidion/password > /dev/null
-sudo chown obsidion:obsidion /etc/obsidion/password
-sudo chmod 600 /etc/obsidion/password
-
 sudo cp /var/lib/obsidion/obsidion/deploy/obsidion.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now obsidion
@@ -145,8 +143,10 @@ Check it came up:
 sudo journalctl -u obsidion -n 20
 ```
 
-**Do not pass `--mine` yet.** These nodes should relay, not mine, until the
-announced start time.
+**The seed carries no wallet and never mines.** It relays blocks and
+transactions, nothing else — so there is no password to set and no keys on a
+machine facing the open internet. You mine separately, on your own computer,
+where the wallet lives.
 
 ### Confirm it from somewhere else
 

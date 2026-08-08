@@ -8,13 +8,13 @@
 #   sudo systemctl enable --now obsidion
 #   sudo journalctl -u obsidion -f          # watch it run
 #
-# The wallet password is read from /etc/obsidion/password, which must be
-# readable only by the service user:
+# **This node carries no wallet.** A seed relays blocks and transactions; it
+# never mines and never spends, so it has no use for keys — and a machine
+# facing the open internet with no keys on it is a machine with nothing worth
+# stealing. There is no password to set and no credential file to protect.
 #
-#   sudo mkdir -p /etc/obsidion
-#   printf 'your-password' | sudo tee /etc/obsidion/password > /dev/null
-#   sudo chown obsidion:obsidion /etc/obsidion/password
-#   sudo chmod 600 /etc/obsidion/password
+# To mine, run a separate node on your own machine with --wallet and --mine.
+# That one needs no inbound connectivity at all; see the README.
 
 [Unit]
 Description=Obsidion (OBSD) full node
@@ -27,20 +27,15 @@ User=obsidion
 Group=obsidion
 WorkingDirectory=/var/lib/obsidion/obsidion
 
-# The password file is loaded as an environment file, so it must contain
-# exactly: OBSIDION_WALLET_PASSWORD=...
-EnvironmentFile=/etc/obsidion/password
-
 # Without this, Python buffers stdout when it is not a terminal and the
 # start-up banner never reaches journalctl — so a node that came up fine looks
 # like one that hung.
 Environment=PYTHONUNBUFFERED=1
 
+# No --wallet and no --mine: this node relays, and nothing else.
 ExecStart=/var/lib/obsidion/obsidion/.venv/bin/python -m obsidion.node \
     --network mainnet \
     --datadir /var/lib/obsidion/data \
-    --wallet /var/lib/obsidion/data/node.wallet \
-    --create-wallet \
     --host 0.0.0.0 \
     --port 9444
 
