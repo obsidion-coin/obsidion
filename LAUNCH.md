@@ -52,67 +52,67 @@ time. Once it is public it is cloned, mirrored and indexed within hours, and
 nothing is recallable.
 
 The repository already contains `LICENSE` (MIT), a CI workflow that runs all
-359 tests on Linux, Windows and macOS, and a README that states the known
+360 tests on Linux, Windows and macOS, and a README that states the known
 limitations plainly. Leave that section in. A project that names its own weak
 points is trusted more than one that does not, and everything in it is
 discoverable anyway.
 
-## Step 2 — Stand up a seed node (1 hour, free)
+## Step 2 — Stand up a seed node (30 minutes, ~$6/month)
 
 A new node needs someone to call. Without a reachable seed you can announce to
 an audience that then cannot join.
 
-**This costs nothing.** Oracle Cloud's Always Free tier includes a permanent
-VM with a public IP — not a twelve-month trial. Google Cloud's free `e2-micro`
-is a workable second choice; watch its 1 GB/month egress allowance, which
-bills rather than stops.
-
 One seed is enough to launch. Two, on different providers, is better — a
 network whose only seed is offline is a network nobody new can join.
 
-### Creating the instance
+Any cheap VPS works. A seed uses roughly 100 MB: chain state lives on disk in
+SQLite, the mempool is capped at 50 MB, and a relay-only node never mines, so
+scrypt's 2 MB per hash never applies.
 
-At <https://cloud.oracle.com>, create a **Compute instance**:
+### Creating the droplet
 
-- **Shape:** `VM.Standard.E2.1.Micro` (AMD, 1 GB). Almost always available.
-  The ARM `VM.Standard.A1.Flex` shapes are far more generous and frequently
-  **out of capacity** in busy regions — that error is normal and not something
-  you did wrong. Take the AMD micro and move on.
-- **Image:** Canonical Ubuntu (22.04 or 24.04).
-- **SSH keys:** save the private key Oracle offers; it is the only way in.
+At <https://cloud.digitalocean.com> → **Create → Droplet**:
 
-### Opening the port — the step that traps everyone
+- **Image:** Ubuntu 24.04 LTS
+- **Size:** Basic → Regular → **$6/mo** (1 GB RAM, 1 vCPU, 25 GB SSD). The
+  $4 tier also works; the extra dollar buys headroom against the mempool bound.
+- **Region:** anywhere near you
+- **Authentication:** SSH key or password, either is fine
 
-**Oracle has two independent firewalls, and you must open port 9444 in both.**
-Miss either and the node runs perfectly, logs look healthy, and nobody in the
-world can reach it.
+New accounts get $200 of credit for 60 days, so this is free through launch
+and well beyond; it bills $6/month afterwards.
 
-**First, the Virtual Cloud Network security list** (in the console):
-Networking → Virtual Cloud Networks → your VCN → Security Lists → Default →
-**Add Ingress Rule**:
+### Opening the port
 
-```
-Source CIDR:      0.0.0.0/0
-IP Protocol:      TCP
-Destination Port: 9444
-```
-
-**Second, the instance's own firewall.** Oracle's Ubuntu images ship
-`iptables` rules that drop everything, regardless of `ufw`:
+DigitalOcean droplets have **no cloud-side firewall** unless you explicitly
+create one, so the machine's own firewall is the only thing to configure:
 
 ```bash
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 9444 -j ACCEPT
-sudo netfilter-persistent save
-```
-
-If `ufw` is active, allow it there too:
-
-```bash
+sudo ufw allow OpenSSH
 sudo ufw allow 9444/tcp
+sudo ufw --force enable
+sudo ufw status
 ```
+
+`sudo ufw allow OpenSSH` first, always. Enabling `ufw` without it locks you out
+of your own server.
 
 **Open only 9444.** The wallet RPC stays on loopback and must never be
 exposed — see `SECURITY.md`; use an SSH tunnel if you need it remotely.
+
+### A note on free-tier providers
+
+Oracle Cloud's Always Free tier is genuinely permanent and looks ideal, but it
+has a trap worth knowing before you spend an evening on it: **Always Free
+compute exists only in your tenancy's home region, and the home region cannot
+be changed after signup.** Newer regions do not offer the AMD `E2.1.Micro`
+shape at all, leaving only Ampere `A1.Flex` — which is in near-permanent
+"Out of capacity" shortage in busy regions. If your home region lands wrong,
+there is no free shape available and no way to move.
+
+Google Cloud's free `e2-micro` in `us-west1`/`us-central1`/`us-east1` is a
+better free bet, with the caveat that its 1 GB/month egress allowance bills
+rather than stops.
 
 ### Installing the node
 
@@ -155,16 +155,15 @@ python deploy/preflight.py <public-ip>:9444
 ```
 
 **Run this from your laptop, never from the server.** A machine can always
-reach itself, so checking locally proves nothing at all about either firewall.
+reach itself, so checking locally proves nothing about the firewall at all.
 This is the only test that shows the outside world can get in.
 
-### Two notes on free tiers
+### If you ever lose the server
 
-Oracle may reclaim Always Free compute that sits genuinely idle. A running
-node is not idle, but a seed disappearing is precisely the failure that stops
-new people joining, so check on it occasionally.
+A seed disappearing is precisely the failure that stops new people joining, so
+check on it occasionally.
 
-If you ever lose the VM, a spare machine at home works as a fallback, because
+If you ever lose it, a spare machine at home works as a fallback, because
 **`seed_nodes` accepts hostnames as well as IP addresses** — verified by
 `tests/test_integration.py::test_a_seed_may_be_a_hostname_rather_than_an_ip`.
 Register a free DuckDNS name, point it at your home connection, forward port
