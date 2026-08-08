@@ -175,9 +175,11 @@ MAINNET = NetworkParams(
     max_future_block_time=10 * 60,     # well under the 5h retarget window
     genesis_timestamp=1_785_628_800,   # 2026-08-02T00:00:00Z
     genesis_message=b"Obsidion genesis - forged under pressure, 02 Aug 2026",
-    # Fill these in with your own always-on nodes before announcing the
-    # network. Until then a new node can only join via --connect.
-    seed_nodes=(),
+    # The addresses a brand-new node dials when it knows nobody. Adding more,
+    # on different providers, is the single best thing anyone can do for the
+    # network's resilience — a network whose only seed is offline is a network
+    # nobody new can join.
+    seed_nodes=("67.205.129.204:9444",),
     genesis_nonce=1451,
 )
 
