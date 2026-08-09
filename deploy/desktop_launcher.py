@@ -31,7 +31,8 @@ import time
 import webbrowser
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from obsidion.params import get_network  # noqa: E402
 from obsidion.rpc import read_cookie  # noqa: E402
@@ -45,11 +46,35 @@ HUD_PORT = 8081
 NODE_WAIT_SECONDS = 300
 
 
+def find_wallet(network: str, datadir: Path) -> Path:
+    """The wallet to open, preferring one that already exists.
+
+    This must never quietly start a *second* wallet for someone who already has
+    one. A new wallet means a new address, so mining would pay into keys the
+    owner does not think of as theirs while their real balance sits untouched
+    somewhere else — and they would only notice when the numbers stopped
+    matching.
+
+    Existing wallets are commonly in the project folder rather than the data
+    directory, because the documented commands say `--wallet mainnet.wallet`
+    and that resolves against whatever directory you ran them from. So look
+    there too before concluding this is a first run.
+    """
+    name = f"{network}.wallet"
+    for candidate in (datadir / name, REPO_ROOT / name):
+        if candidate.exists():
+            return candidate
+    return datadir / name
+
+
 def node_argv(network: str, datadir: Path) -> list[str]:
     """The arguments the node is started with on behalf of a first-time user.
 
     `--create-wallet` because someone opening this for the first time has no
     wallet and should be walked through making one rather than shown an error.
+    It is harmless when a wallet already exists — the node opens the existing
+    file and only creates one when the path is empty — but `find_wallet` is
+    what makes sure the path points at the wallet they already own.
     `--mine` because the HUD's whole mining half is meaningless otherwise.
 
     Deliberately no `--connect`: a downloader finds the network through the
@@ -59,7 +84,7 @@ def node_argv(network: str, datadir: Path) -> list[str]:
     return [
         "--network", network,
         "--datadir", str(datadir),
-        "--wallet", str(datadir / f"{network}.wallet"),
+        "--wallet", str(find_wallet(network, datadir)),
         "--create-wallet",
         "--host", "127.0.0.1",
         "--mine",
@@ -146,9 +171,19 @@ def main(argv: list[str] | None = None) -> None:
     datadir = launcher_datadir(network)
     datadir.mkdir(parents=True, exist_ok=True)
 
+    wallet = find_wallet(network, datadir)
     print(f"  Obsidion - starting the {network} node and wallet HUD.")
-    print("  If this is your first run you will be asked to choose a wallet")
-    print("  password. Write it down: there is no way to recover it.\n")
+    print(f"  Wallet: {wallet}")
+    if wallet.exists():
+        # Naming the file matters: the alternative is someone typing a password
+        # into what they assume is their wallet and quietly opening another.
+        print("  Enter its password when asked below.\n")
+    else:
+        print("  No wallet found here, so a new one will be created and you")
+        print("  will choose a password. Write it down: there is no recovery.")
+        print("  If you already have a wallet, close this window and check")
+        print("  the path above - opening the wrong one gives you a different")
+        print("  address and your balance will appear to be missing.\n")
 
     # The HUD waits in the background; the node owns the console so its password
     # prompt is visible and Ctrl+C / closing the window stops everything.

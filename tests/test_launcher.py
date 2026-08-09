@@ -47,10 +47,22 @@ def test_the_node_is_started_with_what_a_first_timer_needs(tmp_path):
     assert args["--host"] == "127.0.0.1"
 
 
-def test_the_wallet_lives_beside_the_chain_and_is_named_for_its_network(tmp_path):
+def test_the_wallet_lives_beside_the_chain_and_is_named_for_its_network(
+    tmp_path, monkeypatch
+):
     """Two networks must never share a wallet file: a testnet wallet opened as
     mainnet is refused by the wallet's own network binding, and the error would
-    be baffling to a beginner."""
+    be baffling to a beginner.
+
+    REPO_ROOT is pointed at an empty directory so this tests the fresh-install
+    naming, not whichever wallets happen to exist in the developer's checkout.
+    """
+    import desktop_launcher
+
+    empty_repo = tmp_path / "repo"
+    empty_repo.mkdir()
+    monkeypatch.setattr(desktop_launcher, "REPO_ROOT", empty_repo)
+
     mainnet = _pairs(node_argv("mainnet", tmp_path))["--wallet"]
     regtest = _pairs(node_argv("regtest", tmp_path))["--wallet"]
 
@@ -149,3 +161,51 @@ def test_a_practice_chain_never_shares_mainnets_data_directory():
         for n in ("mainnet", "testnet", "regtest")
     }
     assert len(set(wallets.values())) == 3, wallets
+
+
+def test_an_existing_wallet_is_opened_rather_than_a_second_one_created(tmp_path):
+    """The launcher must never quietly start a second wallet.
+
+    A new wallet means a new address, so mining would pay into keys the owner
+    does not think of as theirs while their real balance sits untouched
+    elsewhere - noticed only when the numbers stop matching. Reported for real:
+    the icon offered to create a wallet for someone who already had one, whose
+    file was in the project folder rather than the data directory.
+    """
+    from desktop_launcher import find_wallet
+
+    # Data directory wins when the wallet is there.
+    (tmp_path / "mainnet.wallet").write_text("x")
+    assert find_wallet("mainnet", tmp_path) == tmp_path / "mainnet.wallet"
+
+
+def test_a_wallet_in_the_project_folder_is_found(tmp_path, monkeypatch):
+    """Existing wallets usually live beside the code, because the documented
+    command is `--wallet mainnet.wallet` run from that directory."""
+    import desktop_launcher
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mainnet.wallet").write_text("x")
+    monkeypatch.setattr(desktop_launcher, "REPO_ROOT", repo)
+
+    empty_datadir = tmp_path / "data"
+    empty_datadir.mkdir()
+
+    found = desktop_launcher.find_wallet("mainnet", empty_datadir)
+    assert found == repo / "mainnet.wallet"
+    # And the node is told to use it, not the empty data directory path.
+    assert _pairs(desktop_launcher.node_argv("mainnet", empty_datadir))["--wallet"] \
+        == str(repo / "mainnet.wallet")
+
+
+def test_a_genuinely_first_run_still_creates_one_in_the_data_directory(tmp_path,
+                                                                       monkeypatch):
+    import desktop_launcher
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(desktop_launcher, "REPO_ROOT", repo)
+
+    assert desktop_launcher.find_wallet("mainnet", tmp_path) == tmp_path / "mainnet.wallet"
+    assert "--create-wallet" in desktop_launcher.node_argv("mainnet", tmp_path)
