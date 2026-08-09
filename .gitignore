@@ -16,7 +16,13 @@ dist/
 *.db-wal
 *.db-shm
 data/
+# Match the wallet file AND any backup/dated copy of it. Plain "*.wallet"
+# misses "mainnet.wallet.backup" and "mainnet.wallet.bak-2026-08-07", so a
+# stray `git add -A` could publish an encrypted keystore. The `*.wallet*`
+# glob closes that.
 *.wallet
+*.wallet.*
+*.wallet-*
 wallet.json
 *.key
 
