@@ -163,26 +163,60 @@ This is the only test that shows the outside world can get in.
 A seed disappearing is precisely the failure that stops new people joining, so
 check on it occasionally.
 
-If you ever lose it, a spare machine at home works as a fallback, because
-**`seed_nodes` accepts hostnames as well as IP addresses** — verified by
-`tests/test_integration.py::test_a_seed_may_be_a_hostname_rather_than_an_ip`.
-Register a free DuckDNS name, point it at your home connection, forward port
-9444, and put `yourname.duckdns.org:9444` in `seed_nodes`.
+Because step 3 published a *hostname*, losing the server is recoverable in
+seconds and without a release: stand the node up somewhere else, re-point the
+DuckDNS name at it, and every installed copy of the software finds the new
+machine on its next lookup. Nobody has to upgrade, and the announcement thread
+never has to be corrected.
 
-That path has real costs: your home IP becomes public, and a listening service
-sits on your home network. Use a machine that holds nothing you care about —
-an old laptop or a Raspberry Pi — **never your main computer.**
+A spare machine at home is a perfectly good place to point it while you sort
+out hosting — it is how this network bridged its first outage. That path has
+real costs, though: your home IP becomes publicly associated with the
+hostname, and a listening service sits on your home network. Use a machine
+that holds nothing you care about — an old laptop or a Raspberry Pi —
+**never your main computer** — and move it to a rented server when you can.
 
 ## Step 3 — Bake the seed addresses in (10 minutes)
 
-Edit `obsidion/params.py`, in `MAINNET`:
+**Publish a hostname, not an IP address.** This is the single most valuable
+line in this runbook, and it is learned the hard way.
+
+`seed_nodes` entries are resolved, not parsed — `node.py` splits on the last
+colon and hands the rest to `asyncio.open_connection`. A free dynamic-DNS name
+works exactly as well as an address, and
+`tests/test_integration.py::test_a_seed_may_be_a_hostname_rather_than_an_ip`
+asserts it so a refactor cannot quietly remove the capability.
+
+The difference matters enormously. An IP baked into published code welds the
+network to one machine at one provider. When that machine dies — an outage, a
+closed account, a billing failure, a region you cannot get capacity in — the
+seed address in everyone's installed copy is dead, and reviving it means a new
+release that every user must pull. A hostname makes the same failure a
+five-second DNS change nobody else ever sees. The seed can move between a
+home machine and any provider, repeatedly, without a single line of code
+changing.
+
+Register a free name at <https://www.duckdns.org> (sign in with GitHub or
+Google; no card, no email confirmation), then edit `obsidion/params.py`, in
+`MAINNET`:
 
 ```python
-    seed_nodes=("203.0.113.10:9444", "198.51.100.20:9444"),
+    seed_nodes=("yourname.duckdns.org:9444", "second-seed.example.org:9444"),
 ```
 
 Commit, push, and **redeploy the seed** (`git pull && sudo systemctl
-restart obsidion`) so they run the same code as everyone else.
+restart obsidion`) so it runs the same code as everyone else.
+
+Keep the name pointed at whatever machine is currently serving. DuckDNS
+updates on a plain HTTPS GET, so a cron entry every five minutes keeps a
+dynamic home IP correct:
+
+```bash
+*/5 * * * * curl -fsS "https://www.duckdns.org/update?domains=YOURNAME&token=YOURTOKEN&ip=" >/dev/null
+```
+
+Leaving `ip=` empty tells DuckDNS to use the source address of the request,
+which is what you want from behind a home router.
 
 From your own machine, prove a stranger can join:
 

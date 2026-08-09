@@ -179,7 +179,14 @@ MAINNET = NetworkParams(
     # on different providers, is the single best thing anyone can do for the
     # network's resilience — a network whose only seed is offline is a network
     # nobody new can join.
-    seed_nodes=("67.205.129.204:9444",),
+    #
+    # A *hostname*, deliberately, never a bare IP. Seeds are resolved rather
+    # than parsed, so a dynamic-DNS name lets the seed move between machines
+    # and providers without a release — and every installed copy follows it on
+    # the next lookup. An IP welded into published code turns any outage,
+    # closed account or lost region into a dead bootstrap address that only a
+    # new version can fix. See LAUNCH.md step 3.
+    seed_nodes=("obsidioncoin.duckdns.org:9444",),
     genesis_nonce=1451,
 )
 
