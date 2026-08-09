@@ -56,6 +56,31 @@ python -m venv .venv
 .venv\Scripts\pip install ecdsa flask pytest        # (Linux/macOS: .venv/bin/pip)
 ```
 
+### One click, no terminal (Windows)
+
+If a command line is not your thing, put an icon on the desktop instead. Run
+this once, from the project folder:
+
+```
+powershell -ExecutionPolicy Bypass -File deploy\install-hud-shortcut.ps1
+```
+
+That creates **Obsidion Wallet HUD** on your desktop. Double-click it and a
+black window opens, asks for your wallet password (choosing one on the first
+run), starts mining, and then opens the wallet dashboard in your browser
+automatically.
+
+**Leave the black window open — it *is* the node.** Closing it stops mining and
+shuts the wallet down; nothing is lost, but nothing runs either. Write the
+password down somewhere safe: it encrypts your keys and there is no recovery.
+
+To practise with worthless coins first, install the shortcut pointed at the
+private test chain instead — same wallet, same HUD, no real stakes:
+
+```
+powershell -ExecutionPolicy Bypass -File deploy\install-hud-shortcut.ps1 -Network regtest
+```
+
 **Try everything in five minutes** — a private regtest chain where blocks mine
 instantly and halvings arrive every 10 blocks:
 
