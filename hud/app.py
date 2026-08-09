@@ -155,7 +155,11 @@ def mining_kpis(
     """
     from obsidion.block import compact_to_target, expected_hashes
 
-    my_hashrate = float(info.get("hashrate") or 0.0)
+    # An idle miner contributes nothing, whatever number the node reports for
+    # it. Deriving share and projected earnings from a stale rate would put a
+    # confident forecast next to a status of "idle", which is worse than a
+    # blank: every figure below hangs off this one.
+    my_hashrate = float(info.get("hashrate") or 0.0) if info.get("mining") else 0.0
     height = info.get("height", 0)
 
     # Work per block at the newest target we can see.

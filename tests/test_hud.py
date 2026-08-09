@@ -376,10 +376,11 @@ def test_the_page_exposes_a_send_form_behind_a_confirm_step(stack):
 # --------------------------------------------------------------------------
 
 
-def _kpi_info(hashrate=100.0, height=200, reward="50"):
+def _kpi_info(hashrate=100.0, height=200, reward="50", mining=True):
     return {
         "height": height,
         "hashrate": hashrate,
+        "mining": mining,
         "halving": {"block_reward": reward},
     }
 
@@ -580,3 +581,27 @@ def test_the_page_offers_hide_and_delete_controls(stack):
     assert "key is not touched" in html
     # And deleting must demand the word, not just a click.
     assert "Type DELETE to confirm" in html
+
+
+def test_an_idle_miner_reports_no_hashrate_and_no_earnings():
+    """The contradiction seen on the live HUD: "idle" beside 133 H/s.
+
+    Miner.hashrate() divided total hashes by wall-clock seconds since start, so
+    a stopped miner kept reporting a rate that no longer existed. Every figure
+    below hangs off it, so the panel showed 58.4% of network power and a
+    140,099 OBSD/day forecast next to a status of idle.
+
+    mining_kpis must not trust a hashrate when the node says mining is off,
+    whatever number arrives in the info dict.
+    """
+    from hud.app import mining_kpis
+
+    stale = _kpi_info(hashrate=133.0, mining=False)
+    k = mining_kpis(stale, _window(12, 30, "1f0fffff"), [], target_block_time=150)
+
+    assert k["my_hashrate"] == 0.0
+    assert k["share"] == 0.0
+    assert k["seconds_per_block_for_us"] == 0.0
+    assert k["expected_daily"] == 0.0
+    # The network estimate is independent of us and must survive.
+    assert k["network_hashrate"] > 0

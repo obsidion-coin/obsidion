@@ -210,8 +210,16 @@ class Miner:
         return self._thread is not None and self._thread.is_alive()
 
     def hashrate(self) -> float:
-        """Rough hashes per second since the miner started."""
-        if self._started_at is None:
+        """Rough hashes per second, or zero when not actually mining.
+
+        A stopped miner keeps its counters, so dividing them by wall-clock time
+        would report a "current" rate that no longer exists and that slowly
+        decays as the clock runs on — the HUD showed 133 H/s beside a status of
+        idle. This figure is read as *what the machine is doing now*, in the
+        explorer and the HUD alike, so it must be zero when the answer is
+        nothing.
+        """
+        if self._started_at is None or not self.running:
             return 0.0
         elapsed = time.monotonic() - self._started_at
         return self.hashes_tried / elapsed if elapsed > 0 else 0.0

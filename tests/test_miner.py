@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -144,3 +145,33 @@ def test_the_miner_thread_finds_blocks_and_stops_cleanly(chain):
 
     # What it found must be a genuinely valid block.
     assert accept(chain, found[0]).status == "connected"
+
+
+def test_hashrate_is_zero_once_the_miner_stops():
+    """Hashrate means "what this machine is doing now", not a lifetime average.
+
+    The counters survive stop(), so dividing them by elapsed wall-clock time
+    reported a phantom rate that decayed but never reached zero — the HUD and
+    explorer both read this field as current. Observed live: mining false,
+    hashrate 131.8.
+    """
+    chain = ChainState(REGTEST)
+    try:
+        m = Miner(chain, Mempool(REGTEST), MINER_ADDR, lambda block: None)
+        assert m.hashrate() == 0.0, "nothing tried yet"
+
+        m.start()
+        try:
+            deadline = time.monotonic() + 5
+            while m.hashes_tried == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert m.hashes_tried > 0, "the miner never hashed anything"
+            assert m.hashrate() > 0, "a running miner must report a rate"
+        finally:
+            m.stop()
+
+        # Counters are deliberately kept; the reported rate is not.
+        assert m.hashes_tried > 0
+        assert m.hashrate() == 0.0
+    finally:
+        chain.close()
