@@ -353,3 +353,41 @@ def test_topping_up_peers_falls_back_to_seeds_without_crashing():
     # original defect raised before a single connection was attempted.
     asyncio.run(node._top_up_outbound())
     assert node.seeds == [("127.0.0.1", 9)]
+
+
+def test_a_dropped_dial_cannot_hang_the_node(monkeypatch):
+    """A peer that drops our SYN must not stall the dialer.
+
+    Shipped fragile: connect() called asyncio.open_connection with no timeout,
+    so a silently *dropped* SYN — a firewall set to DROP not REJECT, a NAT
+    hairpin, a dead IP that no longer sends RST — hung for the OS connect
+    timeout (~21s on Windows). During boot that overran node.start()'s 15s
+    budget and raised "network thread failed to start"; a real node hit exactly
+    this dialing its own seed over a flaky hairpin. A refused connection always
+    returned fast; only the dropped-SYN case hung.
+
+    Here open_connection never returns. The bounded dial must still give up
+    within the timeout and record the failure rather than block forever.
+    """
+    import asyncio
+
+    from obsidion import p2p
+
+    node = p2p.P2PNode(ChainState(REGTEST), Mempool(REGTEST), REGTEST)
+    monkeypatch.setattr(p2p, "CONNECT_TIMEOUT_SECONDS", 0.2)
+
+    async def never_returns(host, port):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(p2p.asyncio, "open_connection", never_returns)
+
+    async def run():
+        # The outer bound is the test's safety net: if connect() were still
+        # unbounded this would raise TimeoutError and fail loudly rather than
+        # hang the suite.
+        await asyncio.wait_for(node.connect("10.255.255.1", 9444), timeout=5)
+
+    asyncio.run(run())
+
+    assert ("10.255.255.1", 9444) in node.failed
+    assert not node.peers

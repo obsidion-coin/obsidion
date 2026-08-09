@@ -81,6 +81,15 @@ TARGET_OUTBOUND = 8
 #: Seconds between rounds of connection upkeep.
 MAINTENANCE_INTERVAL = 20
 
+#: How long to wait for a dial to complete before giving up on it. Without a
+#: bound, a host that silently *drops* our SYN — a firewall configured to drop
+#: rather than reject, a NAT hairpin, a dead address that no longer sends RST —
+#: hangs the dial for the operating system's full connect timeout (~21s on
+#: Windows). During start-up that stalls boot past its own deadline and the
+#: node fails to start; during maintenance it freezes the upkeep loop. A
+#: refused connection already returns fast; this bounds the silent case too.
+CONNECT_TIMEOUT_SECONDS = 8
+
 #: A peer silent for this long is pinged; silent again and it is dropped.
 PING_AFTER_IDLE = 90
 
@@ -363,11 +372,18 @@ class P2PNode:
 
     async def connect(self, host: str, port: int) -> None:
         """Dial a peer. Failures are logged, not raised — an unreachable peer
-        is routine, and the address book has other names in it."""
+        is routine, and the address book has other names in it.
+
+        The dial is bounded by CONNECT_TIMEOUT_SECONDS: a peer that drops our
+        SYN instead of refusing it would otherwise hang for the OS connect
+        timeout, and a hang here stalls start-up and the maintenance loop."""
         try:
-            reader, writer = await asyncio.open_connection(host, port)
-        except OSError as exc:
-            log.info("could not reach %s:%d: %s", host, port, exc)
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), CONNECT_TIMEOUT_SECONDS
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            reason = "timed out" if isinstance(exc, asyncio.TimeoutError) else exc
+            log.info("could not reach %s:%d: %s", host, port, reason)
             self.failed.add((host, port))
             return
 
