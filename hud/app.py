@@ -24,11 +24,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 
 from obsidion.params import COIN, COIN_NAME, TICKER, get_network
 from obsidion.rpc import _is_loopback, read_cookie
-from obsidion.rpcclient import rpc
+from obsidion.rpcclient import RPCClientError, rpc
 
 
 # --------------------------------------------------------------------------
@@ -200,8 +200,40 @@ PAGE = r"""
   .addr-list { max-height:14rem; overflow:auto; }
   .copied { color:var(--good); font-size:.72rem; margin-left:.4rem; }
 
+  .send { margin-top:1.1rem; padding-top:.9rem; border-top:1px solid var(--line); }
+  .send h3 { font-size:.78rem; color:var(--dim); text-transform:uppercase;
+             letter-spacing:.09em; margin-bottom:.6rem; }
+  .send input { width:100%; background:var(--bg); border:1px solid var(--line);
+                color:var(--text); padding:.45rem .6rem; border-radius:7px;
+                font:inherit; font-family:ui-monospace,monospace; font-size:.82rem;
+                margin-bottom:.45rem; }
+  .send input:focus { outline:none; border-color:var(--accent); }
+  .send-amount-row { display:flex; align-items:center; gap:.6rem; }
+  .send-amount-row input { flex:1; margin-bottom:0; }
+  .send-amount-row .dim { font-size:.75rem; white-space:nowrap; }
+  /* The confirm box is visually louder than the form on purpose: stage two
+     should not look like more of stage one. */
+  .confirm { margin-top:.8rem; padding:.8rem; border:1px solid var(--warn);
+             border-radius:9px; background:rgba(230,181,102,.06); }
+  .confirm-title { color:var(--warn); font-size:.8rem; text-transform:uppercase;
+                   letter-spacing:.08em; margin-bottom:.5rem; }
+  .confirm-row { display:flex; justify-content:space-between; margin-bottom:.25rem; }
+  .amount-big { font-size:1.15rem; font-variant-numeric:tabular-nums; }
+  /* Full address, wrapped — never truncated. An ellipsis here would hide the
+     exact characters the user is being asked to check. */
+  .confirm-addr { word-break:break-all; background:var(--bg); padding:.4rem .5rem;
+                  border-radius:6px; margin:.2rem 0 .5rem; line-height:1.45; }
+  .confirm-warn { color:var(--warn); font-size:.75rem; margin-bottom:.6rem; }
+  button.danger { border-color:var(--warn); color:var(--warn); }
+  button.danger:hover { background:var(--warn); color:#0d0b12; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button:disabled:hover { background:var(--panel); color:var(--warn); }
+  .send-result { font-size:.78rem; margin-top:.5rem; word-break:break-all; }
+
   /* Ctrl+Alt+Enter compact overlay: collapse to a small corner summary. */
   body.compact { background:transparent; }
+  /* .detail carries the send form too, so the overlay cannot spend by
+     accident — the compact view is for glancing, not transacting. */
   body.compact header, body.compact .panel .detail { display:none; }
   body.compact main { grid-template-columns:1fr; max-width:22rem; margin:0;
                       padding:.5rem; gap:.5rem; }
@@ -239,6 +271,39 @@ PAGE = r"""
         <span id="copied" class="copied"></span>
       </div>
       <div class="addr-list" id="addresses"></div>
+
+      <div class="send">
+        <h3>Send</h3>
+        <input id="send-address" placeholder="recipient address (obsd1…)"
+               autocomplete="off" spellcheck="false">
+        <div class="send-amount-row">
+          <input id="send-amount" placeholder="amount" inputmode="decimal"
+                 autocomplete="off">
+          <span class="dim">spendable <span id="send-avail">—</span></span>
+        </div>
+        <div class="controls">
+          <button id="review-send">Review send</button>
+        </div>
+
+        <!-- Stage two. Nothing has been sent at this point; this box only
+             restates what stage one typed, in full, so a wrong address has a
+             chance to look wrong before it becomes irreversible. -->
+        <div id="confirm-box" class="confirm" hidden>
+          <div class="confirm-title">Confirm this payment</div>
+          <div class="confirm-row"><span class="dim">amount</span>
+            <span id="confirm-amount" class="amount-big"></span></div>
+          <div class="confirm-row"><span class="dim">to</span></div>
+          <div id="confirm-address" class="mono confirm-addr"></div>
+          <div class="confirm-warn">
+            This cannot be undone. Check every character of the address.
+          </div>
+          <div class="controls">
+            <button id="confirm-send" class="danger">Confirm send</button>
+            <button id="cancel-send">Cancel</button>
+          </div>
+        </div>
+        <div id="send-result" class="send-result"></div>
+      </div>
     </div>
   </section>
 
@@ -285,6 +350,10 @@ async function refresh(){
   catch(e){ $('net').textContent = 'node unreachable'; return; }
 
   $('net').textContent = s.node.network;
+  $('net').dataset.ticker = s.ticker;
+  // Keep the send pre-check honest against the live balance.
+  spendable = Number(s.balance.spendable);
+  $('send-avail').textContent = fmt(s.balance.spendable);
   $('spendable').textContent = fmt(s.balance.spendable);
   $('immature').textContent  = fmt(s.balance.immature);
   $('total').textContent     = fmt(s.balance.total);
@@ -344,6 +413,77 @@ $('new-address').onclick  = () => act('newaddress');
 $('start-mining').onclick = () => act('startmining');
 $('stop-mining').onclick  = () => act('stopmining');
 
+// ---- Sending: two stages, and only the second one moves money -------------
+let spendable = 0;
+
+function showResult(text, cls){
+  const el = $('send-result');
+  el.className = 'send-result ' + (cls || '');
+  el.textContent = text;
+}
+
+function hideConfirm(){
+  $('confirm-box').hidden = true;
+  const btn = $('confirm-send');
+  btn.disabled = false;
+  btn.textContent = 'Confirm send';
+}
+
+// Stage one. Validates and *reveals* — it never contacts the node. The node
+// re-checks all of this anyway; these checks exist to fail fast and to say
+// something more useful than the RPC would.
+$('review-send').onclick = () => {
+  const address = $('send-address').value.trim();
+  const amount  = $('send-amount').value.trim();
+  showResult('');
+
+  if (!address) return showResult('Enter a recipient address.', 'warn');
+  if (!amount || !(Number(amount) > 0))
+    return showResult('Enter an amount greater than zero.', 'warn');
+  if (Number(amount) > spendable)
+    return showResult('Only ' + fmt(spendable) + ' is spendable right now. '
+      + 'Mined coins stay immature until they age past the maturity window.', 'warn');
+
+  // Echo the address in full — the whole point of this step.
+  $('confirm-amount').textContent = fmt(amount) + ' ' + ($('net').dataset.ticker || '');
+  $('confirm-address').textContent = address;
+  $('confirm-box').hidden = false;
+};
+
+$('cancel-send').onclick = () => { hideConfirm(); showResult('Cancelled.', 'dim'); };
+
+// Stage two. The only path that spends.
+$('confirm-send').onclick = async () => {
+  const btn = $('confirm-send');
+  // Disable immediately: a double-click would try to spend the same UTXOs
+  // twice. The node would reject the second, but a clear UI beats a race.
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+
+  const address = $('send-address').value.trim();
+  const amount  = $('send-amount').value.trim();
+
+  try {
+    const r = await fetch('/action/send', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({address, amount})
+    });
+    const body = await r.json();
+    if (!r.ok) { showResult('Refused: ' + (body.error || 'unknown error'), 'warn');
+                 hideConfirm(); return; }
+    showResult('Sent ' + fmt(amount) + ' — fee ' + body.fee
+               + ', remaining ' + body.remaining + '. txid ' + body.txid, 'good');
+    $('send-address').value = '';
+    $('send-amount').value = '';
+    hideConfirm();
+    refresh();
+  } catch (e) {
+    showResult('Could not reach the node — nothing was sent.', 'warn');
+    hideConfirm();
+  }
+};
+
 // Ctrl+Alt+Enter toggles the compact corner overlay; remembered across reloads.
 if (localStorage.getItem('hud-compact') === '1') document.body.classList.add('compact');
 window.addEventListener('keydown', e => {
@@ -402,6 +542,29 @@ def create_app(rpc_port: int, token: str = "", *, network: str = "mainnet") -> F
     @app.post("/action/newaddress")
     def action_newaddress():
         return jsonify({"address": call("getnewaddress")})
+
+    @app.post("/action/send")
+    def action_send():
+        """Relay a payment to the node, surfacing its refusal verbatim.
+
+        The page puts a two-stage confirm in front of this, but that is a guard
+        against slips, not a security boundary: the node validates the address,
+        the amount, and the available funds itself, and is the only thing that
+        can actually move coins. Whatever it refuses, we report in its own
+        words rather than inventing our own — the node's message names the
+        actual problem (wrong network, too fine, not enough mature funds).
+        """
+        payload = request.get_json(silent=True) or {}
+        address = str(payload.get("address", "")).strip()
+        amount = str(payload.get("amount", "")).strip()
+        if not address or not amount:
+            return jsonify({"error": "address and amount are both required"}), 400
+
+        try:
+            return jsonify(call("send", address, amount))
+        except RPCClientError as exc:
+            # A refusal, not a crash: nothing moved, and the user should see why.
+            return jsonify({"error": str(exc)}), 400
 
     @app.post("/action/startmining")
     def action_startmining():

@@ -94,9 +94,19 @@ and the halving countdown — meant to be left open in a corner while you mine:
 ```
 
 Press **Ctrl+Alt+Enter** to collapse it to a compact corner overlay. It has
-start/stop mining buttons and a "new receive address" button, but it
-deliberately **cannot send coins** — a HUD is for watching, and a send form on
-an always-open page is a footgun.
+start/stop mining buttons, a "new receive address" button, and a send form.
+
+**Sending takes two deliberate steps.** "Review send" does not send: it checks
+the amount against your spendable balance and then shows a confirmation box
+echoing the recipient address *in full*, unabbreviated, so a wrong address has
+a chance to look wrong while it is still reversible. Only "Confirm send"
+spends, and it disables itself on click so a double-tap cannot double-spend.
+The compact overlay hides the send form entirely — glancing and transacting
+should not share a surface.
+
+The node validates independently regardless: a malformed address, an address
+for the wrong network, an amount finer than one shard, or more than your mature
+funds are each refused by the node itself, and the HUD shows you its reason.
 
 Unlike the explorer, the HUD is **loopback-only and must never be exposed**: it
 shows private balances and reaches a node token that can spend. It refuses to

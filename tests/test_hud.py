@@ -16,7 +16,7 @@ import pytest
 from hud.app import build_state, create_app, main
 from obsidion import crypto
 from obsidion.node import ObsidionNode
-from obsidion.params import REGTEST
+from obsidion.params import MAINNET, REGTEST
 from obsidion.rpc import RPCServer
 from obsidion.wallet import Wallet
 
@@ -233,3 +233,138 @@ def test_it_refuses_to_bind_off_loopback_without_permission():
     """The HUD reaches a spend-capable token; a public bind would be a giveaway."""
     with pytest.raises(SystemExit):
         main(["--host", "0.0.0.0", "--network", "regtest"])
+
+
+# --------------------------------------------------------------------------
+# Sending — the only HUD action that moves money, so it is tested hardest.
+# Each failure case asserts not just the rejection but that the balance is
+# untouched: a send that half-happens is worse than one that refuses.
+# --------------------------------------------------------------------------
+
+
+def _recipient_address() -> str:
+    """An address belonging to somebody else, valid on regtest."""
+    return Wallet(REGTEST, [b"\x51" * 32]).addresses()[0]
+
+
+def _spendable(node) -> int:
+    with node.lock:
+        return node.wallet.balance(node.chain).spendable
+
+
+def test_send_moves_coins_to_another_address(stack):
+    node, rpc, client = stack
+    burn = crypto.hash160(b"nobody-mines-here")
+
+    # Pay exactly one coinbase to the wallet, then mine the rest to somebody
+    # else. Otherwise every confirming block hands this wallet a fresh reward
+    # and matures older ones, and the balance delta measures mining rather than
+    # the payment under test.
+    node.generate(1)
+    node.generate(REGTEST.coinbase_maturity + 1, burn)
+
+    before = _spendable(node)
+    assert before > 0, "the mined coinbase should have matured by now"
+    recipient = _recipient_address()
+
+    response = client.post(
+        "/action/send", json={"address": recipient, "amount": "10"}
+    )
+    assert response.status_code == 200, response.data
+    body = json.loads(response.data)
+    assert len(body["txid"]) == 64
+
+    from decimal import Decimal
+
+    fee = Decimal(body["fee"])
+    assert fee > 0, "a real payment pays a real fee"
+
+    # Confirm it on the chain, not just in the reply — again to the burn
+    # address, so the only change to this wallet is the payment itself.
+    node.generate(1, burn)
+
+    pkh = crypto.address_to_pubkey_hash(recipient, REGTEST.bech32_hrp)
+    with node.lock:
+        owned = node.chain.utxos_for_pubkey_hash(pkh)
+    assert sum(entry.amount for _, entry in owned) == 10 * 100_000_000
+
+    # Down by exactly the amount plus the fee — change returned, nothing lost.
+    after = _spendable(node)
+    expected = Decimal(before) - Decimal(10 * 100_000_000) - fee * 100_000_000
+    assert Decimal(after) == expected
+
+
+def test_send_to_a_bad_address_is_rejected_without_moving_coins(stack):
+    node, rpc, client = stack
+    node.generate(1 + REGTEST.coinbase_maturity)
+    before = _spendable(node)
+
+    response = client.post(
+        "/action/send", json={"address": "obsd1nonsense", "amount": "1"}
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+    assert _spendable(node) == before, "a refused send must not touch the balance"
+
+
+def test_send_to_a_mainnet_address_is_rejected_on_regtest(stack):
+    """Cross-network sends are the quiet way to burn coins forever."""
+    node, rpc, client = stack
+    node.generate(1 + REGTEST.coinbase_maturity)
+    before = _spendable(node)
+
+    mainnet_address = Wallet(MAINNET, [b"\x62" * 32]).addresses()[0]
+    response = client.post(
+        "/action/send", json={"address": mainnet_address, "amount": "1"}
+    )
+    assert response.status_code == 400
+    assert _spendable(node) == before
+
+
+def test_send_more_than_spendable_is_rejected(stack):
+    node, rpc, client = stack
+    node.generate(1 + REGTEST.coinbase_maturity)
+    before = _spendable(node)
+
+    absurd = str(before // 100_000_000 + 1_000_000)
+    response = client.post(
+        "/action/send", json={"address": _recipient_address(), "amount": absurd}
+    )
+    assert response.status_code == 400
+    assert _spendable(node) == before
+
+
+def test_send_of_a_sub_shard_amount_is_rejected(stack):
+    """A shard is the indivisible unit; anything finer is not representable."""
+    node, rpc, client = stack
+    node.generate(1 + REGTEST.coinbase_maturity)
+    before = _spendable(node)
+
+    response = client.post(
+        "/action/send",
+        json={"address": _recipient_address(), "amount": "0.000000001"},
+    )
+    assert response.status_code == 400
+    assert _spendable(node) == before
+
+
+def test_send_of_a_negative_amount_is_rejected(stack):
+    node, rpc, client = stack
+    node.generate(1 + REGTEST.coinbase_maturity)
+    before = _spendable(node)
+
+    response = client.post(
+        "/action/send", json={"address": _recipient_address(), "amount": "-5"}
+    )
+    assert response.status_code == 400
+    assert _spendable(node) == before
+
+
+def test_the_page_exposes_a_send_form_behind_a_confirm_step(stack):
+    node, rpc, client = stack
+    html = client.get("/").data.decode()
+
+    assert "send-address" in html and "send-amount" in html
+    # The two-stage flow must exist: reviewing is not sending.
+    assert "Review send" in html
+    assert "Confirm send" in html
