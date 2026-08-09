@@ -25,6 +25,7 @@ HUD, rather than sleeping a hopeful few seconds.
 
 from __future__ import annotations
 
+import socket
 import sys
 import threading
 import time
@@ -109,6 +110,19 @@ def hud_url(port: int = HUD_PORT) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """Whether something is already listening there.
+
+    Checked before starting anything, because the alternative is what a real
+    user met: a node already running in another window, and the launcher
+    exiting on a forty-line OSError traceback about socket addresses. The
+    person this icon exists for cannot read that.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex((host, port)) == 0
+
+
 def wait_for_node(
     rpc_port: int, datadir: Path, timeout: float, network: str | None = None
 ) -> bool:
@@ -170,6 +184,27 @@ def main(argv: list[str] | None = None) -> None:
     params = get_network(network)
     datadir = launcher_datadir(network)
     datadir.mkdir(parents=True, exist_ok=True)
+
+    # A node already running - a terminal someone forgot about, or the icon
+    # double-clicked twice - must not end in a bind traceback. Attach to it:
+    # the person wanted their wallet on screen, and it is the same wallet
+    # whichever process serves it.
+    if port_in_use(params.default_port) or port_in_use(params.default_rpc_port):
+        print(f"  An Obsidion {network} node is already running on this machine.")
+        if port_in_use(HUD_PORT):
+            print(f"  The wallet HUD is already up too - opening it.\n")
+            webbrowser.open(hud_url())
+            input("  Press Enter to close this window. The node keeps running.")
+            return
+        print("  Using it: opening the wallet HUD against the running node.")
+        print("  Closing THIS window will not stop that node.\n")
+        _serve_hud(params.default_rpc_port, datadir, network)
+        try:
+            input("  Press Enter to close this window and its HUD. "
+                  "The node keeps running.")
+        except EOFError:
+            pass
+        return
 
     wallet = find_wallet(network, datadir)
     print(f"  Obsidion - starting the {network} node and wallet HUD.")

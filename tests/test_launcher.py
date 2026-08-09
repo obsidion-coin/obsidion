@@ -209,3 +209,25 @@ def test_a_genuinely_first_run_still_creates_one_in_the_data_directory(tmp_path,
 
     assert desktop_launcher.find_wallet("mainnet", tmp_path) == tmp_path / "mainnet.wallet"
     assert "--create-wallet" in desktop_launcher.node_argv("mainnet", tmp_path)
+
+
+def test_port_in_use_detects_a_listener_and_a_free_port():
+    """The check that turns a second launch from a traceback into a message."""
+    import socket as _socket
+
+    from desktop_launcher import port_in_use
+
+    # A port nothing is on.
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        free_port = s.getsockname()[1]
+    assert port_in_use(free_port) is False
+
+    # A port something is listening on.
+    listener = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    try:
+        assert port_in_use(listener.getsockname()[1]) is True
+    finally:
+        listener.close()
