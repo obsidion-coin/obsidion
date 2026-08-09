@@ -368,3 +368,145 @@ def test_the_page_exposes_a_send_form_behind_a_confirm_step(stack):
     # The two-stage flow must exist: reviewing is not sending.
     assert "Review send" in html
     assert "Confirm send" in html
+
+
+# --------------------------------------------------------------------------
+# Mining KPIs. The arithmetic is checked against hand-computable cases, because
+# a plausible-looking wrong hashrate is worse than no hashrate at all.
+# --------------------------------------------------------------------------
+
+
+def _kpi_info(hashrate=100.0, height=200, reward="50"):
+    return {
+        "height": height,
+        "hashrate": hashrate,
+        "halving": {"block_reward": reward},
+    }
+
+
+def _window(count, spacing, bits, start_time=1_000_000):
+    return [
+        {"height": i, "time": start_time + i * spacing, "bits": bits}
+        for i in range(count)
+    ]
+
+
+def test_network_hashrate_is_work_per_block_over_observed_spacing():
+    """The core estimate, checked against a hand-computed value."""
+    from obsidion.block import compact_to_target, expected_hashes
+    from hud.app import mining_kpis
+
+    bits = "1f0fffff"
+    work = expected_hashes(compact_to_target(int(bits, 16)))
+
+    # 11 gaps of 30s between 12 blocks.
+    k = mining_kpis(
+        _kpi_info(), _window(12, 30, bits), [], target_block_time=150
+    )
+
+    assert k["avg_block_seconds"] == 30
+    assert k["network_hashrate"] == pytest.approx(work / 30)
+    # Our 100 H/s against that network.
+    assert k["share"] == pytest.approx(100.0 / (work / 30))
+    # Mean wait for us is the whole block's work at our own rate.
+    assert k["seconds_per_block_for_us"] == pytest.approx(work / 100.0)
+
+
+def test_kpis_degrade_gracefully_on_a_chain_too_short_to_measure():
+    """A fresh node must render a HUD, not divide by zero."""
+    from hud.app import mining_kpis
+
+    for window in ([], _window(1, 30, "1f0fffff")):
+        k = mining_kpis(_kpi_info(), window, [], target_block_time=150)
+        assert k["network_hashrate"] == 0.0
+        assert k["share"] == 0.0
+        assert k["expected_daily"] == 0.0
+
+
+def test_a_backdated_block_cannot_produce_a_negative_rate():
+    """Timestamps are miner-supplied and only loosely ordered.
+
+    A block dated before its parent would give a negative span, and a negative
+    'seconds per block' would render as a nonsense hashrate. Clamped to zero.
+    """
+    from hud.app import mining_kpis
+
+    window = _window(6, 30, "1f0fffff")
+    window[-1]["time"] = window[0]["time"] - 500  # last block dated far in the past
+
+    k = mining_kpis(_kpi_info(), window, [], target_block_time=150)
+    assert k["avg_block_seconds"] == 0.0
+    assert k["network_hashrate"] == 0.0
+
+
+def test_share_never_exceeds_one_hundred_percent():
+    """On a tiny chain our own rate can exceed a noisy estimate; cap it."""
+    from hud.app import mining_kpis
+
+    # Absurdly fast local hashrate against a slow network estimate.
+    k = mining_kpis(
+        _kpi_info(hashrate=1e18), _window(12, 30, "1f0fffff"), [],
+        target_block_time=150,
+    )
+    assert k["share"] == 1.0
+
+
+def test_blocks_found_windows_count_only_recent_coinbases():
+    from hud.app import mining_kpis
+
+    # Tip 200; regtest-ish target of 150s means a day is 576 blocks.
+    heights = [1, 50, 120, 199]
+    k = mining_kpis(
+        _kpi_info(height=200), _window(12, 150, "1f0fffff"), heights,
+        target_block_time=150,
+    )
+    assert k["blocks_found_total"] == 4
+    assert k["blocks_found_last_100"] == 2  # heights 120 and 199
+    assert k["blocks_found_last_day"] == 4  # window is 576 blocks, all qualify
+
+
+def test_state_exposes_kpis_against_a_live_node(stack):
+    node, rpc, client = stack
+    node.generate(4)
+
+    state = _state(client)
+    k = state["kpis"]
+
+    assert k["blocks_found_total"] == 4
+    assert k["sample_size"] > 0
+    assert state["wallet"]["coinbase_heights"] == [1, 2, 3, 4]
+
+
+def test_the_page_renders_the_kpi_panel(stack):
+    node, rpc, client = stack
+    html = client.get("/").data.decode()
+
+    assert "Mining performance" in html
+    for element in ("kpi-nethash", "kpi-share", "kpi-daily", "kpi-eta"):
+        assert element in html
+
+
+def test_a_young_chain_is_flagged_as_still_climbing_out_of_the_floor():
+    """The daily projection is honest only with this caveat attached.
+
+    A new chain starts at the difficulty floor and mints blocks far faster than
+    target, so "projected daily" reads absurdly high — on the real mainnet
+    launch it showed six figures a day, which will collapse as difficulty
+    retargets. The flag drives a warning next to the number; without it the
+    figure is worse than showing nothing.
+    """
+    from hud.app import mining_kpis
+
+    fast = mining_kpis(
+        _kpi_info(), _window(12, 20, "1f0fffff"), [], target_block_time=150
+    )
+    assert fast["difficulty_still_rising"] is True
+
+    at_target = mining_kpis(
+        _kpi_info(), _window(12, 150, "1f0fffff"), [], target_block_time=150
+    )
+    assert at_target["difficulty_still_rising"] is False
+
+    # No samples means no claim either way.
+    unknown = mining_kpis(_kpi_info(), [], [], target_block_time=150)
+    assert unknown["difficulty_still_rising"] is False

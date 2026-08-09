@@ -391,3 +391,70 @@ def test_a_dropped_dial_cannot_hang_the_node(monkeypatch):
 
     assert ("10.255.255.1", 9444) in node.failed
     assert not node.peers
+
+
+def test_an_unreachable_peer_is_announced_once_not_every_retry(monkeypatch, caplog):
+    """A permanently dead address must not reprint every maintenance round.
+
+    The maintenance loop retries while the node is short of peers, so a
+    gossiped address that was never routable gets dialled every
+    MAINTENANCE_INTERVAL forever. Logging each attempt at info buries genuine
+    messages under thousands of identical lines — observed on a live node
+    filling its console with one dead LAN address.
+
+    The subtlety this pins: _top_up_outbound CLEARS `failed` whenever it runs
+    out of fresh candidates, so keying "have I already said this?" off `failed`
+    reprints anyway. The suppression must survive that reset, and must reset
+    itself when the peer genuinely comes back.
+    """
+    import asyncio
+    import logging
+
+    from obsidion import p2p
+
+    node = p2p.P2PNode(ChainState(REGTEST), Mempool(REGTEST), REGTEST)
+
+    async def refused(host, port):
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr(p2p.asyncio, "open_connection", refused)
+
+    with caplog.at_level(logging.INFO, logger="obsidion.p2p"):
+        asyncio.run(node.connect("192.0.2.90", 9444))
+        # Simulate what _top_up_outbound does when candidates run dry.
+        node.failed.clear()
+        for _ in range(5):
+            asyncio.run(node.connect("192.0.2.90", 9444))
+
+    announcements = [
+        r for r in caplog.records
+        if r.levelno >= logging.INFO and "could not reach 192.0.2.90" in r.getMessage()
+    ]
+    assert len(announcements) == 1, (
+        f"expected one announcement, got {len(announcements)} — the log "
+        "suppression did not survive failed.clear()"
+    )
+
+    # A peer that comes back must be reported, and must be able to be reported
+    # as lost again later; otherwise a flapping peer goes silent forever.
+    class _Writer:
+        def close(self): pass
+
+    async def accepted(host, port):
+        return object(), _Writer()
+
+    monkeypatch.setattr(p2p.asyncio, "open_connection", accepted)
+    monkeypatch.setattr(p2p, "Peer", lambda *a, **k: object())
+
+    def _discard(coro):
+        # Close the coroutine we are choosing not to run, so it does not warn.
+        coro.close()
+
+    monkeypatch.setattr(p2p.asyncio, "ensure_future", _discard)
+
+    with caplog.at_level(logging.INFO, logger="obsidion.p2p"):
+        caplog.clear()
+        asyncio.run(node.connect("192.0.2.90", 9444))
+
+    assert any("reconnected" in r.getMessage() for r in caplog.records)
+    assert ("192.0.2.90", 9444) not in node._reported_unreachable

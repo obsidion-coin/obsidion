@@ -336,6 +336,12 @@ class P2PNode:
         #: Addresses dialled and found unreachable. Retried, but only after
         #: everything else has been tried.
         self.failed: set[tuple[str, int]] = set()
+        #: Addresses whose unreachability has already been announced in the log.
+        #: Deliberately separate from `failed`, which _top_up_outbound clears
+        #: whenever it runs out of fresh candidates — keying the log off that
+        #: would reprint the same line every retry, which is the noise this
+        #: exists to stop. Cleared per-address only on a successful connect.
+        self._reported_unreachable: set[tuple[str, int]] = set()
         self._maintenance: asyncio.Task | None = None
 
     # -------------------------------------------------------------- lifecycle
@@ -383,10 +389,25 @@ class P2PNode:
             )
         except (OSError, asyncio.TimeoutError) as exc:
             reason = "timed out" if isinstance(exc, asyncio.TimeoutError) else exc
-            log.info("could not reach %s:%d: %s", host, port, reason)
+            # Announce a peer going dark once, then stop repeating it. The
+            # maintenance loop retries every MAINTENANCE_INTERVAL for as long as
+            # the node is short of peers, so an address that is permanently gone
+            # — a machine retired, a gossiped address that was never routable —
+            # otherwise reprints the same line every few seconds forever and
+            # buries everything worth reading. Still logged at debug for anyone
+            # actually diagnosing connectivity.
+            if (host, port) in self._reported_unreachable:
+                log.debug("still cannot reach %s:%d: %s", host, port, reason)
+            else:
+                log.info("could not reach %s:%d: %s", host, port, reason)
+                self._reported_unreachable.add((host, port))
             self.failed.add((host, port))
             return
 
+        # Back from the dead: log the recovery, since we announced the loss.
+        if (host, port) in self._reported_unreachable:
+            log.info("reconnected to %s:%d", host, port)
+            self._reported_unreachable.discard((host, port))
         self.failed.discard((host, port))
         peer = Peer(reader, writer, host, outbound=True)
         self.addrbook.add((host, port))

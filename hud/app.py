@@ -105,6 +105,10 @@ def build_state(
             "utxos": wallet_utxos,
             "blocks_mined": blocks_mined,
             "mined_total_shards": mined_total,
+            # Heights of the blocks we mined and still hold, for the KPI panel.
+            "coinbase_heights": sorted(
+                u["height"] for u in wallet_utxos if u["coinbase"]
+            ),
         },
         "mining": {
             "active": bool(info.get("mining")),
@@ -119,6 +123,109 @@ def build_state(
             "synced": synced,
         },
         "halving": info.get("halving", {}),
+    }
+
+
+def mining_kpis(
+    info: dict,
+    recent_blocks: list[dict],
+    my_coinbase_heights: list[int],
+    *,
+    target_block_time: int,
+) -> dict:
+    """Derive the numbers a miner actually wants from data the node already has.
+
+    `recent_blocks` is a small window of the newest blocks, each with `time` and
+    `bits`. Everything below follows from three facts: how much work a block
+    costs at the current target, how fast blocks are actually arriving, and how
+    fast this machine hashes.
+
+      * network hashrate ≈ work-per-block ÷ observed seconds-per-block. This is
+        an estimate from a short window, so it is noisy — block discovery is a
+        Poisson process and a handful of samples will swing it. Presented as an
+        estimate, not a measurement.
+      * share = our hashrate ÷ network hashrate, which is also our expected
+        share of future blocks.
+      * expected seconds per block *for us* = work-per-block ÷ our hashrate.
+        This is a mean, not a countdown: mining is memoryless, so having waited
+        an hour tells you nothing about the next minute.
+
+    Returns zeros rather than raising when the chain is too short to measure —
+    a fresh node should render a HUD, not an error.
+    """
+    from obsidion.block import compact_to_target, expected_hashes
+
+    my_hashrate = float(info.get("hashrate") or 0.0)
+    height = info.get("height", 0)
+
+    # Work per block at the newest target we can see.
+    work_per_block = 0.0
+    if recent_blocks:
+        try:
+            work_per_block = expected_hashes(
+                compact_to_target(int(recent_blocks[-1]["bits"], 16))
+            )
+        except (ValueError, KeyError):
+            work_per_block = 0.0
+
+    # Observed spacing. Timestamps are miner-supplied and only loosely ordered,
+    # so use the span across the window rather than per-pair deltas, and clamp
+    # at zero: a single back-dated block must not produce a negative rate.
+    avg_block_seconds = 0.0
+    if len(recent_blocks) >= 2:
+        span = recent_blocks[-1]["time"] - recent_blocks[0]["time"]
+        if span > 0:
+            avg_block_seconds = span / (len(recent_blocks) - 1)
+
+    network_hashrate = (
+        work_per_block / avg_block_seconds if avg_block_seconds > 0 else 0.0
+    )
+    share = my_hashrate / network_hashrate if network_hashrate > 0 else 0.0
+    # Our own share can exceed the estimate's precision on a tiny network;
+    # a share above 1 is an artefact of the estimate, not a real >100%.
+    share = min(share, 1.0) if network_hashrate > 0 else 0.0
+
+    seconds_per_block_for_us = (
+        work_per_block / my_hashrate if my_hashrate > 0 and work_per_block else 0.0
+    )
+
+    # Expected daily earnings at the current share and reward.
+    reward = 0.0
+    try:
+        reward = float(info.get("halving", {}).get("block_reward") or 0)
+    except (TypeError, ValueError):
+        reward = 0.0
+    blocks_per_day = 86400.0 / avg_block_seconds if avg_block_seconds > 0 else 0.0
+    expected_daily = blocks_per_day * share * reward
+
+    # Blocks we found recently, straight from the heights of the coinbase
+    # outputs we still hold — no extra RPC, though it undercounts any reward
+    # already spent.
+    def found_within(window: int) -> int:
+        floor = height - window
+        return sum(1 for h in my_coinbase_heights if h > floor)
+
+    return {
+        "my_hashrate": my_hashrate,
+        "network_hashrate": network_hashrate,
+        "share": share,
+        "work_per_block": work_per_block,
+        "avg_block_seconds": avg_block_seconds,
+        "target_block_time": target_block_time,
+        "seconds_per_block_for_us": seconds_per_block_for_us,
+        "expected_daily": expected_daily,
+        "blocks_found_total": len(my_coinbase_heights),
+        "blocks_found_last_100": found_within(100),
+        "blocks_found_last_day": found_within(
+            max(1, int(86400 / target_block_time))
+        ),
+        "sample_size": len(recent_blocks),
+        # True while the chain is still climbing out of the difficulty floor,
+        # which makes `expected_daily` wildly optimistic. The page warns on it;
+        # flagged here so the judgement is tested, not buried in JavaScript.
+        "difficulty_still_rising": bool(
+            avg_block_seconds and avg_block_seconds < target_block_time * 0.75
+        ),
     }
 
 
@@ -230,11 +337,22 @@ PAGE = r"""
   button:disabled:hover { background:var(--panel); color:var(--warn); }
   .send-result { font-size:.78rem; margin-top:.5rem; word-break:break-all; }
 
+  .span2 { grid-column:1 / -1; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
+          gap:.9rem 1rem; }
+  .kpi .k { color:var(--dim); font-size:.7rem; text-transform:uppercase;
+            letter-spacing:.08em; }
+  .kpi .v { font-size:1.35rem; font-variant-numeric:tabular-nums; line-height:1.25; }
+  .kpi .v.accent { color:var(--accent); }
+  .kpi .sub { color:var(--dim); font-size:.68rem; margin-top:.05rem; }
+  .kpi-note { font-size:.7rem; margin-top:.9rem; line-height:1.5; }
+
   /* Ctrl+Alt+Enter compact overlay: collapse to a small corner summary. */
   body.compact { background:transparent; }
   /* .detail carries the send form too, so the overlay cannot spend by
      accident — the compact view is for glancing, not transacting. */
   body.compact header, body.compact .panel .detail { display:none; }
+  body.compact .span2 { display:none; }
   body.compact main { grid-template-columns:1fr; max-width:22rem; margin:0;
                       padding:.5rem; gap:.5rem; }
   body.compact .panel { padding:.6rem .8rem; }
@@ -335,6 +453,40 @@ PAGE = r"""
       </div>
     </div>
   </section>
+
+  <section class="panel span2">
+    <h2>Mining performance</h2>
+    <div class="kpis">
+      <div class="kpi"><div class="k">Blocks found</div>
+        <div class="v" id="kpi-found">—</div>
+        <div class="sub" id="kpi-found-sub">held, unspent</div></div>
+      <div class="kpi"><div class="k">Coins mined</div>
+        <div class="v good" id="kpi-mined">—</div>
+        <div class="sub">total held</div></div>
+      <div class="kpi"><div class="k">Last 24h</div>
+        <div class="v" id="kpi-day">—</div>
+        <div class="sub">blocks found</div></div>
+      <div class="kpi"><div class="k">Your hashrate</div>
+        <div class="v" id="kpi-hash">—</div>
+        <div class="sub">this machine</div></div>
+      <div class="kpi"><div class="k">Network hashrate</div>
+        <div class="v" id="kpi-nethash">—</div>
+        <div class="sub" id="kpi-nethash-sub">estimated</div></div>
+      <div class="kpi"><div class="k">Your share</div>
+        <div class="v accent" id="kpi-share">—</div>
+        <div class="sub">of network power</div></div>
+      <div class="kpi"><div class="k">Avg block time</div>
+        <div class="v" id="kpi-blocktime">—</div>
+        <div class="sub" id="kpi-blocktime-sub">—</div></div>
+      <div class="kpi"><div class="k">Expected per block</div>
+        <div class="v" id="kpi-eta">—</div>
+        <div class="sub">mean wait, not a countdown</div></div>
+      <div class="kpi"><div class="k">Projected daily</div>
+        <div class="v good" id="kpi-daily">—</div>
+        <div class="sub" id="kpi-daily-sub">at current share</div></div>
+    </div>
+    <div class="kpi-note dim" id="kpi-note"></div>
+  </section>
 </main>
 
 <script>
@@ -343,6 +495,82 @@ const $ = id => document.getElementById(id);
 
 function fmt(n){ return Number(n).toLocaleString(undefined,{maximumFractionDigits:8}); }
 function shardsToCoin(s){ return (Number(s)/1e8); }
+
+// A rate in hashes/second, in units a person can read.
+function hashrate(h){
+  if (!h) return '0 H/s';
+  const units = ['H/s','kH/s','MH/s','GH/s','TH/s'];
+  let i = 0;
+  while (h >= 1000 && i < units.length - 1){ h /= 1000; i++; }
+  return h.toFixed(h < 10 ? 2 : (h < 100 ? 1 : 0)) + ' ' + units[i];
+}
+
+// A span in seconds, in the largest unit that keeps it readable.
+function duration(s){
+  if (!s || !isFinite(s)) return '—';
+  if (s < 90) return s.toFixed(s < 10 ? 1 : 0) + 's';
+  if (s < 5400) return (s/60).toFixed(1) + ' min';
+  if (s < 172800) return (s/3600).toFixed(1) + ' h';
+  return (s/86400).toFixed(1) + ' d';
+}
+
+function renderKpis(s){
+  const k = s.kpis; if (!k) return;
+  const t = s.ticker;
+
+  $('kpi-found').textContent = k.blocks_found_total;
+  $('kpi-mined').textContent = fmt(shardsToCoin(s.wallet.mined_total_shards)) + ' ' + t;
+  $('kpi-day').textContent   = k.blocks_found_last_day;
+  $('kpi-hash').textContent  = hashrate(k.my_hashrate);
+  $('kpi-nethash').textContent = k.network_hashrate ? hashrate(k.network_hashrate) : '—';
+  $('kpi-nethash-sub').textContent = k.sample_size
+    ? 'estimated from ' + k.sample_size + ' blocks' : 'not enough blocks yet';
+  $('kpi-share').textContent = k.network_hashrate
+    ? (k.share*100).toFixed(k.share > 0.1 ? 1 : 2) + '%' : '—';
+
+  $('kpi-blocktime').textContent = k.avg_block_seconds
+    ? duration(k.avg_block_seconds) : '—';
+  // Compare observed spacing to the 2.5-minute target so a chain still
+  // climbing out of the difficulty floor reads as expected, not broken.
+  if (k.avg_block_seconds && k.target_block_time){
+    const ratio = k.avg_block_seconds / k.target_block_time;
+    $('kpi-blocktime-sub').textContent = ratio < 0.75
+      ? 'faster than the ' + duration(k.target_block_time) + ' target'
+      : (ratio > 1.33 ? 'slower than target' : 'on target');
+  } else {
+    $('kpi-blocktime-sub').textContent = 'target ' + duration(k.target_block_time);
+  }
+
+  $('kpi-eta').textContent = k.seconds_per_block_for_us
+    ? duration(k.seconds_per_block_for_us) : '—';
+  $('kpi-daily').textContent = k.expected_daily
+    ? fmt(k.expected_daily.toFixed(4)) + ' ' + t : '—';
+
+  // A young chain sits at the difficulty floor and produces blocks far faster
+  // than target, which makes the daily projection wildly optimistic. Say so on
+  // the tile itself — a number this large is worse than no number if the
+  // reader does not know it is about to collapse.
+  const climbing = k.avg_block_seconds
+    && k.target_block_time
+    && k.avg_block_seconds < k.target_block_time * 0.75;
+  $('kpi-daily-sub').innerHTML = climbing
+    ? '<span class="warn">difficulty still rising — will fall sharply</span>'
+    : 'at current share and difficulty';
+
+  $('kpi-note').textContent =
+    'Network hashrate is estimated from the last ' + (k.sample_size||0)
+    + ' blocks, so it is noisy on a small chain. "Expected per block" is an '
+    + 'average wait, not a countdown — mining has no memory, so a long dry '
+    + 'spell does not make the next block any closer. "Blocks found" counts '
+    + 'rewards you still hold; spending one lowers it.'
+    + (climbing
+       ? ' Blocks are arriving far faster than the '
+         + duration(k.target_block_time) + ' target because difficulty starts '
+         + 'at the network floor and climbs up to 4x every '
+         + 'retarget period. The daily projection assumes today\'s easy '
+         + 'difficulty and will drop steeply as it catches up.'
+       : '');
+}
 
 async function refresh(){
   let s;
@@ -386,6 +614,8 @@ async function refresh(){
     const done = HALVING_INTERVAL ? (HALVING_INTERVAL - rem)/HALVING_INTERVAL*100 : 0;
     $('halving-bar').style.width = Math.max(0,Math.min(100,done)) + '%';
   }
+
+  renderKpis(s);
 
   const list = $('addresses');
   list.innerHTML = '';
@@ -507,12 +737,42 @@ setInterval(refresh, 3000);
 # --------------------------------------------------------------------------
 
 
+#: How many recent blocks to sample when estimating network hashrate. Small
+#: enough to stay cheap over RPC, large enough that one odd timestamp does not
+#: dominate. The sample is re-fetched only when the tip changes.
+KPI_WINDOW = 12
+
+
 def create_app(rpc_port: int, token: str = "", *, network: str = "mainnet") -> Flask:
     app = Flask(__name__)
     params = get_network(network)
 
     def call(method, *params_):
         return rpc(rpc_port, method, *params_, token=token)
+
+    # Sampling blocks costs two RPC round-trips each, and the page polls every
+    # few seconds — but the answer only changes when a block arrives. Key the
+    # cache on the tip hash so a quiet chain costs nothing at all.
+    block_sample: dict[str, list[dict]] = {}
+
+    def recent_blocks(info: dict) -> list[dict]:
+        tip = info.get("tip", "")
+        cached = block_sample.get(tip)
+        if cached is not None:
+            return cached
+
+        height = info.get("height", 0)
+        blocks = []
+        for h in range(max(0, height - KPI_WINDOW + 1), height + 1):
+            try:
+                block = call("getblock", call("getblockhash", h))
+            except RPCClientError:
+                continue  # a reorg mid-walk; sample what we can
+            blocks.append({"height": h, "time": block["time"], "bits": block["bits"]})
+
+        block_sample.clear()  # only ever the current tip's sample
+        block_sample[tip] = blocks
+        return blocks
 
     @app.get("/")
     def index():
@@ -536,6 +796,12 @@ def create_app(rpc_port: int, token: str = "", *, network: str = "mainnet") -> F
             utxos_by_address,
             peers,
             coinbase_maturity=params.coinbase_maturity,
+        )
+        state["kpis"] = mining_kpis(
+            info,
+            recent_blocks(info),
+            state["wallet"]["coinbase_heights"],
+            target_block_time=params.target_block_time,
         )
         return jsonify(state)
 

@@ -108,6 +108,18 @@ The node validates independently regardless: a malformed address, an address
 for the wrong network, an amount finer than one shard, or more than your mature
 funds are each refused by the node itself, and the HUD shows you its reason.
 
+**Mining performance** sits below: blocks found, coins mined, your hashrate,
+an estimate of the network's, your share of it, observed block spacing against
+the 2.5-minute target, the mean wait between your own blocks, and a projected
+daily yield.
+
+Read those last two carefully. The mean wait is an *average*, not a countdown —
+proof-of-work is memoryless, so an hour without a block does not make the next
+one any closer. And on a young chain the daily projection is wildly optimistic,
+because difficulty starts at the network floor and climbs up to 4× per retarget
+period; the HUD says so next to the number rather than letting you read a
+six-figure daily yield as a forecast.
+
 Unlike the explorer, the HUD is **loopback-only and must never be exposed**: it
 shows private balances and reaches a node token that can spend. It refuses to
 bind off-loopback without an explicit `--allow-remote`. Never put it behind a
