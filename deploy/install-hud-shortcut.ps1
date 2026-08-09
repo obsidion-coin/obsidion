@@ -70,7 +70,18 @@ $link.TargetPath = $python
 $link.Arguments = '"' + $launcher + '" ' + $Network
 $link.WorkingDirectory = $repo
 $link.Description = "Start the Obsidion node and open the wallet HUD"
-$link.IconLocation = "$python,0"
+
+# The Obsidion gem if it is there, Python's own logo if it is not. A missing
+# icon file must never cost somebody their shortcut, so this degrades rather
+# than throwing - the launcher works identically either way.
+$icon = Join-Path $repo "assets\obsidion.ico"
+if (Test-Path $icon) {
+    $link.IconLocation = "$icon,0"
+} else {
+    $link.IconLocation = "$python,0"
+    Write-Host "  warn  assets\obsidion.ico not found; using the Python icon" -ForegroundColor Yellow
+    Write-Host "  warn  regenerate it with: python deploy\make_icon.py" -ForegroundColor Yellow
+}
 $link.Save()
 
 Write-Ok "created $linkPath"

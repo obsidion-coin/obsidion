@@ -24,7 +24,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_file
 
 from obsidion.params import COIN, COIN_NAME, TICKER, get_network
 from obsidion.rpc import _is_loopback, read_cookie
@@ -903,6 +903,20 @@ def create_app(rpc_port: int, token: str = "", *, network: str = "mainnet") -> F
             coin=f"{COIN_NAME} ({TICKER})",
             halving_interval=params.halving_interval,
         )
+
+    @app.get("/favicon.ico")
+    def favicon():
+        """The same gem the desktop shortcut wears.
+
+        Browsers ask for this path unprompted, so serving it needs no markup in
+        the page and no second copy of the artwork. Absent, the tab shows a
+        blank sheet - which is cosmetic, so a missing file is a 404 and not an
+        error worth interrupting anyone over.
+        """
+        icon = Path(__file__).resolve().parent.parent / "assets" / "obsidion.ico"
+        if not icon.exists():
+            return "", 404
+        return send_file(icon, mimetype="image/x-icon")
 
     @app.get("/api/state")
     def api_state():

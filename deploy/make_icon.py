@@ -245,18 +245,6 @@ def build_ico(sizes=SIZES) -> bytes:
     return bytes(directory) + b"".join(images)
 
 
-def favicon_data_uri(size: int = 32) -> str:
-    """The same artwork as a `data:` URI, for the HUD and explorer tabs.
-
-    Inlined rather than served: no route, no extra request, and nothing to get
-    out of step with the icon on the desktop.
-    """
-    import base64
-
-    png = encode_png(size, render(size))
-    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
-
-
 def main() -> None:
     ICON_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = build_ico()

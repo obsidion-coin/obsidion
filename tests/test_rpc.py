@@ -50,12 +50,25 @@ def call(rpc: RPCServer, method: str, *params, token=None, headers=None):
 
 
 def status_of(rpc: RPCServer, method: str, *params, token=None, headers=None) -> int:
-    """The HTTP status a request comes back with, for the rejection paths."""
-    try:
-        call(rpc, method, *params, token=token, headers=headers)
-        return 200
-    except urllib.error.HTTPError as exc:
-        return exc.code
+    """The HTTP status a request comes back with, for the rejection paths.
+
+    Retries once on a connection abort. Refusing a request means writing a
+    short response and closing, and on Windows under load the close can reach
+    the client before the body does — surfacing as ConnectionAbortedError
+    rather than the HTTPError carrying the status. That is a race in this
+    client, not in the server, and retrying distinguishes the two: a real
+    failure to refuse fails on the second attempt as well.
+    """
+    for attempt in (1, 2):
+        try:
+            call(rpc, method, *params, token=token, headers=headers)
+            return 200
+        except urllib.error.HTTPError as exc:
+            return exc.code
+        except (ConnectionAbortedError, ConnectionResetError):
+            if attempt == 2:
+                raise
+    raise AssertionError("unreachable")
 
 
 def result(rpc, method, *params):

@@ -65,10 +65,14 @@ this once, from the project folder:
 powershell -ExecutionPolicy Bypass -File deploy\install-hud-shortcut.ps1
 ```
 
-That creates **Obsidion Wallet HUD** on your desktop. Double-click it and a
-black window opens, asks for your wallet password (choosing one on the first
-run), starts mining, and then opens the wallet dashboard in your browser
-automatically.
+That creates **Obsidion Wallet HUD** on your desktop, carrying the Obsidion
+gem rather than a generic Python icon. Double-click it and a black window
+opens, asks for your wallet password (choosing one on the first run), starts
+mining, and then opens the wallet dashboard in your browser automatically.
+
+The icon lives at `assets/obsidion.ico` and is drawn by `deploy/make_icon.py`
+— pure standard library, no image editor and no extra dependency. Re-run the
+installer any time to refresh the shortcut.
 
 **Leave the black window open — it *is* the node.** Closing it stops mining and
 shuts the wallet down; nothing is lost, but nothing runs either. Write the

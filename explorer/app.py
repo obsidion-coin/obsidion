@@ -19,7 +19,14 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, abort, redirect, render_template_string, request
+from flask import (
+    Flask,
+    abort,
+    redirect,
+    render_template_string,
+    request,
+    send_file,
+)
 
 from obsidion.params import COIN_NAME, TICKER, get_network
 from obsidion.rpc import read_cookie
@@ -262,6 +269,15 @@ def create_app(rpc_port: int, token: str = "") -> Flask:
         return render_template_string(
             LAYOUT, title=title, body=body, refresh=refresh
         )
+
+    @app.get("/favicon.ico")
+    def favicon():
+        """Browsers request this unprompted, so the tab gets the Obsidion gem
+        without a line of markup. Cosmetic, so a missing file is just a 404."""
+        icon = Path(__file__).resolve().parent.parent / "assets" / "obsidion.ico"
+        if not icon.exists():
+            return "", 404
+        return send_file(icon, mimetype="image/x-icon")
 
     @app.get("/")
     def dashboard():
