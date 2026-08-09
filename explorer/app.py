@@ -16,9 +16,6 @@ structurally incapable of corrupting the chain.
 from __future__ import annotations
 
 import argparse
-import json
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,25 +23,7 @@ from flask import Flask, abort, redirect, render_template_string, request
 
 from obsidion.params import COIN_NAME, TICKER, get_network
 from obsidion.rpc import read_cookie
-
-
-def rpc(port: int, method: str, *params, token: str = ""):
-    body = json.dumps({"method": method, "params": list(params), "id": 1}).encode()
-    with urllib.request.urlopen(
-        urllib.request.Request(
-            f"http://127.0.0.1:{port}/",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {token}",
-            },
-        ),
-        timeout=30,
-    ) as response:
-        reply = json.loads(response.read())
-    if reply.get("error"):
-        raise LookupError(reply["error"]["message"])
-    return reply["result"]
+from obsidion.rpcclient import rpc  # shared client; RPCClientError is a LookupError
 
 
 # --------------------------------------------------------------------------

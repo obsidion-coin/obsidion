@@ -82,6 +82,27 @@ And watch it live in a browser:
 The explorer shows blocks as they are mined, circulating supply against the
 cap, and the countdown to the next halving.
 
+## Your wallet at a glance — the HUD
+
+The explorer shows the *chain*; the HUD shows *you*. It is a private dashboard
+of your own balance, addresses, the blocks you have mined, your live hashrate,
+and the halving countdown — meant to be left open in a corner while you mine:
+
+```
+.venv\Scripts\python -m hud.app --network regtest
+→ http://127.0.0.1:8081
+```
+
+Press **Ctrl+Alt+Enter** to collapse it to a compact corner overlay. It has
+start/stop mining buttons and a "new receive address" button, but it
+deliberately **cannot send coins** — a HUD is for watching, and a send form on
+an always-open page is a footgun.
+
+Unlike the explorer, the HUD is **loopback-only and must never be exposed**: it
+shows private balances and reaches a node token that can spend. It refuses to
+bind off-loopback without an explicit `--allow-remote`. Never put it behind a
+public reverse proxy the way the explorer can be.
+
 ## Running a real network
 
 Every node both serves and syncs; there are no special nodes. On the first
@@ -146,9 +167,12 @@ obsidion/
   rpc.py         JSON-RPC over localhost HTTP — the only door into a node
   node.py        the daemon that wires it all together     → obsidion-node
   cli.py         command-line client                       → obsidion-cli
+  rpcclient.py   the tiny JSON-RPC client the explorer and HUD share
 explorer/
-  app.py         Flask explorer, speaks only RPC           → obsidion-explorer
-tests/           360 tests, unit through three-node integration
+  app.py         Flask explorer (public), speaks only RPC  → obsidion-explorer
+hud/
+  app.py         private wallet + mining HUD, loopback-only → obsidion-hud
+tests/           390 tests, unit through three-node integration
 ```
 
 Design rules that hold everywhere:
