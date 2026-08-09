@@ -458,3 +458,54 @@ def test_an_unreachable_peer_is_announced_once_not_every_retry(monkeypatch, capl
 
     assert any("reconnected" in r.getMessage() for r in caplog.records)
     assert ("192.0.2.90", 9444) not in node._reported_unreachable
+
+
+def test_the_mining_thread_survives_a_failed_round(monkeypatch, caplog):
+    """A miner that dies silently is the worst failure a coin can have.
+
+    Miner._run had no exception handler, so anything raised inside it ended the
+    daemon thread with no log: the node kept serving, `mining` quietly read
+    false, and the operator saw an idle miner and no reason. Observed on the
+    live mainnet node, which was found stopped at height 210 with no
+    explanation.
+
+    Here template assembly fails the first few times and then recovers. The
+    miner must keep running throughout and resume mining once it can.
+    """
+    import logging
+
+    from obsidion import miner as miner_module
+
+    monkeypatch.setattr(miner_module, "RETRY_SECONDS", 0.01)
+
+    chain = ChainState(REGTEST)
+    calls = {"n": 0}
+    real_build = miner_module.build_template
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise RuntimeError("transient chain hiccup")
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(miner_module, "build_template", flaky)
+
+    found = threading.Event()
+    m = miner_module.Miner(
+        chain, Mempool(REGTEST), MINER, lambda block: found.set()
+    )
+
+    with caplog.at_level(logging.ERROR, logger="obsidion.miner"):
+        m.start()
+        try:
+            # It must recover and actually mine, not merely stay alive.
+            assert found.wait(timeout=15), "miner never recovered from the failures"
+            assert m.running, "the thread must still be alive after failing rounds"
+        finally:
+            m.stop()
+
+    assert calls["n"] > 3, "the failing rounds should have been retried"
+    assert any("mining round failed" in r.getMessage() for r in caplog.records), (
+        "a failed round must be logged, not swallowed"
+    )
+    chain.close()

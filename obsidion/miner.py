@@ -24,6 +24,7 @@ lottery drawn once.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
@@ -34,8 +35,15 @@ from obsidion.mempool import Mempool
 from obsidion.merkle import merkle_root
 from obsidion.transaction import Transaction
 
+log = logging.getLogger("obsidion.miner")
+
 #: Bytes reserved in a template for the coinbase transaction.
 COINBASE_RESERVE = 250
+
+#: How long the mining thread waits before retrying after an unexpected error.
+#: Long enough not to spin on a persistent fault, short enough that a transient
+#: one costs almost no hashrate.
+RETRY_SECONDS = 5.0
 
 #: Nonces tried between stop-flag and stale-tip checks, per algorithm.
 #:
@@ -211,6 +219,25 @@ class Miner:
     # ------------------------------------------------------------- internals
 
     def _run(self) -> None:
+        """Mine until told to stop, surviving anything that is not fatal.
+
+        A bare thread body would end this thread on the first exception, and
+        because it is a daemon thread nothing else notices: the node keeps
+        serving, `mining` quietly reads false, and the operator sees an idle
+        miner with no reason given. That is the worst failure mode available to
+        a coin whose whole purpose is mining, so a round that blows up is
+        logged and retried rather than being allowed to kill the search.
+        """
+        while not self._stop.is_set():
+            try:
+                self._mine_until_stopped()
+            except Exception:  # noqa: BLE001 — the boundary of the mining thread
+                log.exception("mining round failed; retrying in %.0fs", RETRY_SECONDS)
+                # Wait on the stop flag rather than sleeping, so a stop during
+                # the backoff still takes effect immediately.
+                self._stop.wait(RETRY_SECONDS)
+
+    def _mine_until_stopped(self) -> None:
         extra_nonce = 0
         batch = BATCH_BY_ALGORITHM.get(
             self.chain.params.pow_algorithm, DEFAULT_BATCH

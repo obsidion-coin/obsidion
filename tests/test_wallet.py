@@ -270,3 +270,89 @@ def test_dust_change_is_left_as_fee_rather_than_created(chain, wallet):
     pool = Mempool(REGTEST)
     fee = pool.accept(tx, chain)
     assert fee == 3_000  # estimated fee plus the abandoned dust
+
+
+# --------------------------------------------------------------------------
+# Deleting a key is the only irreversible thing a wallet can do to itself, so
+# the guards get more tests than the operation.
+# --------------------------------------------------------------------------
+
+
+def test_an_unfunded_address_can_be_forgotten(chain, wallet):
+    spare = wallet.new_address()
+    assert spare in wallet.addresses()
+
+    wallet.forget_address(spare, chain)
+
+    assert spare not in wallet.addresses()
+    assert not wallet.owns_address(spare)
+    # And the deletion is durable, not just in memory.
+    assert spare not in Wallet.load(wallet.path, "hunter2").addresses()
+
+
+def test_a_funded_address_is_never_forgotten(chain, wallet):
+    """The whole reason this operation needs guarding: coins would vanish."""
+    funded = wallet.new_address()
+    pkh = crypto.address_to_pubkey_hash(funded, REGTEST.bech32_hrp)
+    mine(chain, pkh)
+    mine(chain, crypto.hash160(b"someone-else"), count=REGTEST.coinbase_maturity)
+
+    with pytest.raises(WalletError, match="holds"):
+        wallet.forget_address(funded, chain)
+
+    assert funded in wallet.addresses()
+    assert wallet.balance(chain).total > 0
+
+
+def test_the_default_address_is_never_forgotten(chain, wallet):
+    """_order[0] receives mining rewards and every payment's change.
+
+    Deleting it silently redirects both, which must never be a side effect of
+    tidying an address list.
+    """
+    default = wallet.addresses()[0]
+    wallet.new_address()  # so it is not merely the last-address guard firing
+
+    with pytest.raises(WalletError, match="default"):
+        wallet.forget_address(default, chain)
+
+    assert wallet.addresses()[0] == default
+
+
+def test_the_last_address_is_never_forgotten(chain, wallet):
+    """A wallet with no keys cannot receive, spend, or mine — and
+    default_pubkey_hash would raise on the node's next block."""
+    only = wallet.addresses()[0]
+    assert len(wallet.addresses()) == 1
+
+    with pytest.raises(WalletError, match="only address"):
+        wallet.forget_address(only, chain)
+
+    assert wallet.addresses() == [only]
+    assert wallet.default_pubkey_hash()  # still answers
+
+
+def test_forgetting_an_address_the_wallet_does_not_hold_is_refused(chain, wallet):
+    stranger = Wallet(REGTEST, [b"\x33" * 32]).addresses()[0]
+    with pytest.raises(WalletError, match="does not hold"):
+        wallet.forget_address(stranger, chain)
+
+
+def test_forgetting_a_malformed_address_is_refused(chain, wallet):
+    with pytest.raises(WalletError):
+        wallet.forget_address("rtobsd1nonsense", chain)
+
+
+def test_forgetting_does_not_disturb_the_remaining_keys(chain, wallet):
+    """Deletion must remove one key and leave every other one intact."""
+    a = wallet.new_address()
+    b = wallet.new_address()
+    before = wallet.addresses()
+
+    wallet.forget_address(a, chain)
+
+    assert wallet.addresses() == [x for x in before if x != a]
+    assert b in wallet.addresses()
+    # The surviving keys must still sign — a corrupted key store would not.
+    reloaded = Wallet.load(wallet.path, "hunter2")
+    assert reloaded.addresses() == wallet.addresses()

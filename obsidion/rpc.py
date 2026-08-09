@@ -347,6 +347,19 @@ class RPCServer:
         with self.node.lock:
             return self._require_wallet().addresses()
 
+    def rpc_deleteaddress(self, address: str) -> str:
+        """Destroy a key permanently, if the wallet judges that safe.
+
+        Irreversible and unrecoverable, so every guard lives in
+        `Wallet.forget_address` — a funded address, the default address that
+        receives mining rewards and change, and the wallet's last address are
+        all refused there rather than here, so the CLI, the HUD and any future
+        caller inherit the same protection instead of each inventing it.
+        """
+        with self.node.lock:
+            self._require_wallet().forget_address(address, self.node.chain)
+        return f"deleted {address}"
+
     def rpc_getbalance(self) -> dict:
         wallet = self._require_wallet()
         with self.node.lock:

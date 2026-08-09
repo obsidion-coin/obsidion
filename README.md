@@ -108,6 +108,20 @@ The node validates independently regardless: a malformed address, an address
 for the wrong network, an amount finer than one shard, or more than your mature
 funds are each refused by the node itself, and the HUD shows you its reason.
 
+**Tidying the address list.** Each address has *hide* and *delete key*, and
+they are not the same thing. **Hide** is a view preference stored in your
+browser: the key is untouched, the address still receives coins and is still
+spendable, it simply stops cluttering the list — and unhides whenever you want.
+**Delete key** is irreversible. In this wallet an address *is* a private key,
+so deleting one rewrites the wallet file without it, and anything sent to that
+address afterwards is unspendable by anyone, forever.
+
+Because of that, deletion is refused outright for an address holding a balance,
+for the default address (mining rewards and payment change land there), and for
+your last remaining address — and it asks you to type `DELETE` even when it is
+allowed. Those guards live in the wallet, not the page, so the CLI and any
+future client inherit them.
+
 **Mining performance** sits below: blocks found, coins mined, your hashrate,
 an estimate of the network's, your share of it, observed block spacing against
 the 2.5-minute target, the mean wait between your own blocks, and a projected

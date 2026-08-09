@@ -510,3 +510,73 @@ def test_a_young_chain_is_flagged_as_still_climbing_out_of_the_floor():
     # No samples means no claim either way.
     unknown = mining_kpis(_kpi_info(), [], [], target_block_time=150)
     assert unknown["difficulty_still_rising"] is False
+
+
+# --------------------------------------------------------------------------
+# Deleting a key. Hiding is browser-only and needs no server; this is the
+# irreversible half, so it is tested against the wallet's real guards.
+# --------------------------------------------------------------------------
+
+
+def test_deleting_an_unfunded_address_removes_it(stack):
+    node, rpc, client = stack
+    spare = json.loads(client.post("/action/newaddress").data)["address"]
+    assert spare in node.wallet.addresses()
+
+    response = client.post("/action/deleteaddress", json={"address": spare})
+    assert response.status_code == 200
+    assert spare not in node.wallet.addresses()
+
+
+def test_deleting_a_funded_address_is_refused(stack):
+    """The guard that exists to stop the HUD destroying money."""
+    node, rpc, client = stack
+    funded = json.loads(client.post("/action/newaddress").data)["address"]
+    pkh = crypto.address_to_pubkey_hash(funded, REGTEST.bech32_hrp)
+    node.generate(1, pkh)
+
+    response = client.post("/action/deleteaddress", json={"address": funded})
+    assert response.status_code == 400
+    assert "holds" in json.loads(response.data)["error"]
+    assert funded in node.wallet.addresses()
+
+
+def test_deleting_the_default_address_is_refused(stack):
+    """It receives mining rewards and every payment's change."""
+    node, rpc, client = stack
+    default = node.wallet.addresses()[0]
+    client.post("/action/newaddress")  # so the last-address guard is not what fires
+
+    response = client.post("/action/deleteaddress", json={"address": default})
+    assert response.status_code == 400
+    assert "default" in json.loads(response.data)["error"]
+    assert node.wallet.addresses()[0] == default
+
+
+def test_deleting_the_only_address_is_refused(stack):
+    node, rpc, client = stack
+    only = node.wallet.addresses()[0]
+
+    response = client.post("/action/deleteaddress", json={"address": only})
+    assert response.status_code == 400
+    assert node.wallet.addresses() == [only]
+
+
+def test_deleting_an_address_the_wallet_does_not_hold_is_refused(stack):
+    node, rpc, client = stack
+    stranger = Wallet(REGTEST, [b"\x44" * 32]).addresses()[0]
+
+    response = client.post("/action/deleteaddress", json={"address": stranger})
+    assert response.status_code == 400
+
+
+def test_the_page_offers_hide_and_delete_controls(stack):
+    node, rpc, client = stack
+    html = client.get("/").data.decode()
+
+    assert "toggle-hidden" in html
+    assert "confirmDelete" in html
+    # Hiding must be documented as not touching the key.
+    assert "key is not touched" in html
+    # And deleting must demand the word, not just a click.
+    assert "Type DELETE to confirm" in html

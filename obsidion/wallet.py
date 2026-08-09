@@ -300,6 +300,65 @@ class Wallet:
             for pkh in self._order
         ]
 
+    def forget_address(self, address: str, chain: ChainState) -> None:
+        """Destroy a key permanently. Refuses whenever that could lose coins.
+
+        There is no undo and no recovery: the key is dropped and the wallet
+        file rewritten without it. Anything sent to the address afterwards —
+        by someone who kept it from an earlier payment, say — is unspendable by
+        anybody, forever. So the guards matter more than the operation:
+
+        * **Holds coins.** Refused outright. Deleting a funded key destroys
+          exactly as much money as it holds.
+        * **The default key.** `_order[0]` is where mining rewards and every
+          transaction's change are sent. Removing it silently redirects both,
+          so it is refused; nothing about that decision should be a side
+          effect of tidying a list.
+        * **The last key.** A wallet with no keys cannot receive, cannot mine,
+          and makes `default_pubkey_hash` raise — the node would fall over on
+          its next block.
+
+        Reserved outputs are deliberately not consulted: a key with a payment
+        in flight still holds its coins on-chain, so the balance check already
+        refuses it.
+        """
+        with self._lock:
+            try:
+                pubkey_hash = crypto.address_to_pubkey_hash(
+                    address, self.params.bech32_hrp
+                )
+            except ValueError as exc:
+                raise WalletError(str(exc)) from exc
+
+            if pubkey_hash not in self._keys:
+                raise WalletError(f"this wallet does not hold {address}")
+            if len(self._order) == 1:
+                raise WalletError(
+                    "refusing to delete the wallet's only address; a wallet "
+                    "with no keys cannot receive, spend, or mine"
+                )
+            if pubkey_hash == self._order[0]:
+                raise WalletError(
+                    "refusing to delete the default address, which receives "
+                    "mining rewards and the change from every payment"
+                )
+
+            held = sum(
+                entry.amount
+                for _, entry in chain.utxos_for_pubkey_hash(pubkey_hash)
+            )
+            if held:
+                raise WalletError(
+                    f"refusing to delete {address}: it holds {held} shards. "
+                    "Move the coins elsewhere first — deleting the key would "
+                    "destroy them."
+                )
+
+            del self._keys[pubkey_hash]
+            self._order.remove(pubkey_hash)
+            if self.path is not None:
+                self.save()
+
     def default_pubkey_hash(self) -> bytes:
         """The wallet's first key — where mining rewards and change land."""
         return self._order[0]

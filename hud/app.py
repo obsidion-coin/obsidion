@@ -347,6 +347,17 @@ PAGE = r"""
   .kpi .sub { color:var(--dim); font-size:.68rem; margin-top:.05rem; }
   .kpi-note { font-size:.7rem; margin-top:.9rem; line-height:1.5; }
 
+  .addr-row { align-items:center; gap:.5rem; }
+  .addr-label { cursor:pointer; flex:1; }
+  .addr-bal { white-space:nowrap; }
+  .addr-tools { display:flex; gap:.3rem; }
+  .addr-row.is-hidden { opacity:.45; }
+  button.mini { padding:.12rem .4rem; font-size:.68rem; border-radius:5px; }
+  button.mini.danger { border-color:var(--warn); color:var(--warn); }
+  button.linky { border:0; background:none; color:var(--dim); padding:.3rem 0;
+                 text-decoration:underline; }
+  button.linky:hover { background:none; color:var(--accent); }
+
   /* Ctrl+Alt+Enter compact overlay: collapse to a small corner summary. */
   body.compact { background:transparent; }
   /* .detail carries the send form too, so the overlay cannot spend by
@@ -389,6 +400,7 @@ PAGE = r"""
         <span id="copied" class="copied"></span>
       </div>
       <div class="addr-list" id="addresses"></div>
+      <button id="toggle-hidden" class="mini linky" hidden></button>
 
       <div class="send">
         <h3>Send</h3>
@@ -617,16 +629,121 @@ async function refresh(){
 
   renderKpis(s);
 
+  renderAddresses(s);
+}
+
+// Hiding is a view preference and never touches the wallet: the key stays,
+// the address still receives, it just stops cluttering this list. Deleting is
+// the other thing entirely, and lives behind the wallet's own guards.
+function hidden(){
+  try { return new Set(JSON.parse(localStorage.getItem('hud-hidden') || '[]')); }
+  catch(e){ return new Set(); }
+}
+function setHidden(set){
+  localStorage.setItem('hud-hidden', JSON.stringify([...set]));
+}
+
+let showHidden = false;
+
+function renderAddresses(s){
   const list = $('addresses');
+  const hide = hidden();
   list.innerHTML = '';
-  for (const a of s.wallet.addresses){
+
+  const rows = s.wallet.addresses.filter(a => showHidden || !hide.has(a.address));
+  const hiddenCount = s.wallet.addresses.length - rows.filter(
+    a => !hide.has(a.address)).length;
+
+  for (const a of rows){
+    const isHidden = hide.has(a.address);
+    const isDefault = a.address === (s.wallet.addresses[0] || {}).address;
+    const funded = Number(a.balance) > 0;
+
     const row = document.createElement('div');
-    row.className = 'row';
-    row.innerHTML = '<span class="mono" style="cursor:pointer" title="click to copy">'
-      + a.address.slice(0,28) + '…</span><span class="good">' + fmt(a.balance) + '</span>';
-    row.firstChild.onclick = () => copy(a.address);
+    row.className = 'row addr-row' + (isHidden ? ' is-hidden' : '');
+
+    const label = document.createElement('span');
+    label.className = 'mono addr-label';
+    label.title = a.address + '\nclick to copy';
+    label.textContent = a.address.slice(0,24) + '…';
+    label.onclick = () => copy(a.address);
+
+    const bal = document.createElement('span');
+    bal.className = 'good addr-bal';
+    bal.textContent = fmt(a.balance);
+
+    const tools = document.createElement('span');
+    tools.className = 'addr-tools';
+
+    const hideBtn = document.createElement('button');
+    hideBtn.className = 'mini';
+    hideBtn.textContent = isHidden ? 'unhide' : 'hide';
+    hideBtn.title = 'Show or hide this address in this list. The key is not touched.';
+    hideBtn.onclick = () => {
+      const h = hidden();
+      if (h.has(a.address)) h.delete(a.address); else h.add(a.address);
+      setHidden(h); refresh();
+    };
+    tools.appendChild(hideBtn);
+
+    // The default address and any funded address cannot be deleted at all —
+    // the wallet refuses. Say so here instead of offering a button that fails.
+    const delBtn = document.createElement('button');
+    delBtn.className = 'mini danger';
+    delBtn.textContent = 'delete key';
+    if (isDefault){
+      delBtn.disabled = true;
+      delBtn.title = 'This is the default address: mining rewards and payment '
+        + 'change land here. It cannot be deleted.';
+    } else if (funded){
+      delBtn.disabled = true;
+      delBtn.title = 'Holds ' + fmt(a.balance) + ' — move the coins elsewhere '
+        + 'first. Deleting the key would destroy them.';
+    } else {
+      delBtn.title = 'Permanently destroy this key. Irreversible.';
+      delBtn.onclick = () => confirmDelete(a.address);
+    }
+    tools.appendChild(delBtn);
+
+    row.append(label, bal, tools);
     list.appendChild(row);
   }
+
+  const toggle = $('toggle-hidden');
+  if (hiddenCount > 0 || showHidden){
+    toggle.hidden = false;
+    toggle.textContent = showHidden
+      ? 'hide hidden addresses'
+      : 'show ' + hiddenCount + ' hidden';
+  } else {
+    toggle.hidden = true;
+  }
+}
+
+// Deleting a key is the one irreversible thing here, so it asks for the word
+// typed out. A button that only needs a second click is not a decision.
+async function confirmDelete(address){
+  const typed = window.prompt(
+    'PERMANENTLY DELETE this key?\n\n' + address + '\n\n'
+    + 'This cannot be undone. If anyone sends coins to this address afterwards, '
+    + 'they are lost forever — nobody can recover them.\n\n'
+    + 'Type DELETE to confirm:');
+  if (typed !== 'DELETE'){
+    if (typed !== null) showResult('Not deleted — confirmation did not match.', 'dim');
+    return;
+  }
+  const r = await fetch('/action/deleteaddress', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({address})
+  });
+  const body = await r.json();
+  if (!r.ok){ showResult('Refused: ' + (body.error || 'unknown error'), 'warn'); }
+  else {
+    // Drop any stale hide entry so a re-created address is not born hidden.
+    const h = hidden(); h.delete(address); setHidden(h);
+    showResult('Key deleted.', 'dim');
+  }
+  refresh();
 }
 
 async function copy(text){
@@ -640,6 +757,7 @@ async function act(path){
   refresh();
 }
 $('new-address').onclick  = () => act('newaddress');
+$('toggle-hidden').onclick = () => { showHidden = !showHidden; refresh(); };
 $('start-mining').onclick = () => act('startmining');
 $('stop-mining').onclick  = () => act('stopmining');
 
@@ -830,6 +948,23 @@ def create_app(rpc_port: int, token: str = "", *, network: str = "mainnet") -> F
             return jsonify(call("send", address, amount))
         except RPCClientError as exc:
             # A refusal, not a crash: nothing moved, and the user should see why.
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/action/deleteaddress")
+    def action_deleteaddress():
+        """Permanently destroy a key, if the wallet allows it.
+
+        Hiding an address is a view preference handled entirely in the browser;
+        this is the other thing, and it cannot be undone. Every guard lives in
+        the wallet, so this relays the refusal rather than second-guessing it.
+        """
+        payload = request.get_json(silent=True) or {}
+        address = str(payload.get("address", "")).strip()
+        if not address:
+            return jsonify({"error": "no address given"}), 400
+        try:
+            return jsonify({"result": call("deleteaddress", address)})
+        except RPCClientError as exc:
             return jsonify({"error": str(exc)}), 400
 
     @app.post("/action/startmining")
