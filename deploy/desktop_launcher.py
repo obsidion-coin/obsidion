@@ -196,6 +196,21 @@ def main(argv: list[str] | None = None) -> None:
             webbrowser.open(hud_url())
             input("  Press Enter to close this window. The node keeps running.")
             return
+        # A node we cannot authenticate to is worse than none: the HUD would
+        # sit on 401s. That happens when the token file is missing - deleted,
+        # or overwritten by a node on another network - and the only cure is
+        # restarting the node, which mints a fresh one. Say so now rather than
+        # waiting out the full start-up timeout for a node that is already up.
+        try:
+            read_cookie(str(datadir), network)
+        except FileNotFoundError:
+            print("\n  ...but its access token is missing, so the wallet cannot")
+            print("  read it. A node writes that token when it starts, so:")
+            print("\n    1. Close the window running that node (Ctrl+C).")
+            print("    2. Double-click this icon again.\n")
+            input("  Press Enter to close this window.")
+            return
+
         print("  Using it: opening the wallet HUD against the running node.")
         print("  Closing THIS window will not stop that node.\n")
         _serve_hud(params.default_rpc_port, datadir, network)
