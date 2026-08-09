@@ -66,11 +66,27 @@ def node_argv(network: str, datadir: Path) -> list[str]:
     ]
 
 
+def launcher_datadir(network: str) -> Path:
+    """Where this network keeps its chain, wallet and token.
+
+    Mainnet uses the node's own default so the icon and a hand-typed
+    `obsidion-node` command share one wallet rather than quietly maintaining
+    two. Every other network gets its own subdirectory: a practice chain must
+    never be able to touch mainnet's files, and running both at once from one
+    directory is exactly how a regtest node came to overwrite the live node's
+    RPC token.
+    """
+    base = Path.home() / ".obsidion"
+    return base if network == "mainnet" else base / network
+
+
 def hud_url(port: int = HUD_PORT) -> str:
     return f"http://127.0.0.1:{port}"
 
 
-def wait_for_node(rpc_port: int, datadir: Path, timeout: float) -> bool:
+def wait_for_node(
+    rpc_port: int, datadir: Path, timeout: float, network: str | None = None
+) -> bool:
     """Block until the node's RPC answers, or the timeout expires.
 
     Polls rather than sleeping a fixed interval because the wait is genuinely
@@ -81,7 +97,7 @@ def wait_for_node(rpc_port: int, datadir: Path, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            rpc(rpc_port, "getinfo", token=read_cookie(str(datadir)))
+            rpc(rpc_port, "getinfo", token=read_cookie(str(datadir), network))
             return True
         except Exception:  # noqa: BLE001 — every failure here means "not yet"
             time.sleep(0.5)
@@ -92,7 +108,7 @@ def _serve_hud(rpc_port: int, datadir: Path, network: str) -> None:
     """Start the HUD once the node is answering, then open a browser at it."""
     from hud.app import create_app
 
-    if not wait_for_node(rpc_port, datadir, NODE_WAIT_SECONDS):
+    if not wait_for_node(rpc_port, datadir, NODE_WAIT_SECONDS, network):
         print(
             f"\n  The node did not start within {NODE_WAIT_SECONDS // 60} minutes, "
             f"so the wallet HUD was not opened.\n"
@@ -100,7 +116,7 @@ def _serve_hud(rpc_port: int, datadir: Path, network: str) -> None:
         )
         return
 
-    app = create_app(rpc_port, read_cookie(str(datadir)), network=network)
+    app = create_app(rpc_port, read_cookie(str(datadir), network), network=network)
     # Printed text stays ASCII: this lands in a Windows console, whose default
     # code page turns a UTF-8 em dash into a replacement character.
     print(f"\n  Wallet HUD ready at {hud_url()} - opening your browser.")
@@ -127,7 +143,7 @@ def main(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     network = args[0] if args and not args[0].startswith("-") else "mainnet"
     params = get_network(network)
-    datadir = Path.home() / ".obsidion"
+    datadir = launcher_datadir(network)
     datadir.mkdir(parents=True, exist_ok=True)
 
     print(f"  Obsidion - starting the {network} node and wallet HUD.")

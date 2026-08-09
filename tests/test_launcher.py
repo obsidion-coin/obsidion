@@ -86,7 +86,9 @@ def test_waiting_returns_as_soon_as_the_node_answers(tmp_path, monkeypatch):
     """And it must not sleep a fixed interval when the node is already up."""
     import desktop_launcher
 
-    monkeypatch.setattr(desktop_launcher, "read_cookie", lambda datadir: "token")
+    monkeypatch.setattr(
+        desktop_launcher, "read_cookie", lambda datadir, network=None: "token"
+    )
     monkeypatch.setattr(desktop_launcher, "rpc", lambda *a, **k: {"height": 0})
 
     assert wait_for_node(9445, tmp_path, timeout=5) is True
@@ -118,3 +120,32 @@ def test_everything_printed_to_the_console_is_ascii():
                     offenders.append((literal.lineno, bad))
 
     assert not offenders, f"non-ASCII in printed strings: {offenders}"
+
+
+def test_a_practice_chain_never_shares_mainnets_data_directory():
+    """regtest must not be able to touch mainnet's files.
+
+    Real incident: the launcher ran regtest in ~/.obsidion, the same directory
+    the live mainnet node was using, and the regtest node's RPC token
+    overwrote mainnet's. The mainnet node kept relaying while every client was
+    locked out with a 401. Namespaced cookies fixed the symptom; this keeps the
+    two chains' files apart in the first place.
+
+    Mainnet deliberately keeps the node's own default so the desktop icon and a
+    hand-typed obsidion-node command share one wallet.
+    """
+    from desktop_launcher import launcher_datadir
+
+    mainnet = launcher_datadir("mainnet")
+    assert mainnet == Path.home() / ".obsidion"
+
+    for other in ("regtest", "testnet"):
+        assert launcher_datadir(other) != mainnet
+        assert mainnet in launcher_datadir(other).parents
+
+    # And the wallet paths that follow from them cannot collide either.
+    wallets = {
+        n: _pairs(node_argv(n, launcher_datadir(n)))["--wallet"]
+        for n in ("mainnet", "testnet", "regtest")
+    }
+    assert len(set(wallets.values())) == 3, wallets

@@ -82,14 +82,43 @@ COOKIE_FILENAME = ".rpccookie"
 MAX_REQUEST_BYTES = 1_000_000
 
 
-def read_cookie(datadir: str | Path) -> str:
+def cookie_filename(network: str | None) -> str:
+    """The cookie file for one network, e.g. '.rpccookie-mainnet'.
+
+    Namespaced per network for the same reason the chain databases are
+    (`mainnet-chain.db`, `regtest-chain.db`): networks share a data directory
+    by default, so a single shared file lets one node silently overwrite
+    another's token. When that happened the second node kept running and
+    relaying perfectly while every client — CLI, explorer, HUD — was locked out
+    with a 401, which reads as a broken node rather than a clobbered file.
+
+    `network=None` yields the legacy shared name, which is still accepted when
+    reading so a client started against an older node keeps working.
+    """
+    return COOKIE_FILENAME if network is None else f"{COOKIE_FILENAME}-{network}"
+
+
+def read_cookie(datadir: str | Path, network: str | None = None) -> str:
     """Read the auth token a running node wrote to its data directory.
 
     Clients call this; it is the whole of the authentication scheme from their
     side. Raises FileNotFoundError if no node has started, which is the honest
     answer to "why can I not connect".
+
+    Prefers this network's own cookie and falls back to the legacy shared file,
+    so a client pointed at a node from before the split still authenticates.
     """
-    return Path(datadir).joinpath(COOKIE_FILENAME).read_text().strip()
+    directory = Path(datadir)
+    candidates = [directory / cookie_filename(network)]
+    if network is not None:
+        candidates.append(directory / COOKIE_FILENAME)
+
+    for path in candidates:
+        try:
+            return path.read_text().strip()
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError(candidates[0])
 
 
 def _is_loopback(host: str) -> bool:
@@ -197,13 +226,20 @@ class RPCServer:
         self.port = self.httpd.server_address[1]
         self._thread: threading.Thread | None = None
 
+    @property
+    def cookie_path(self) -> Path | None:
+        """Where this node publishes its token — one file per network."""
+        if self.datadir is None:
+            return None
+        return self.datadir / cookie_filename(self.node.params.name)
+
     def _write_cookie(self) -> None:
         """Publish the token where local clients — and only local clients —
         can read it. A remote attacker cannot read a file on your disk."""
-        if self.datadir is None:
+        path = self.cookie_path
+        if path is None:
             return
         self.datadir.mkdir(parents=True, exist_ok=True)
-        path = self.datadir / COOKIE_FILENAME
         path.write_text(self.token)
         try:
             os.chmod(path, 0o600)
@@ -227,8 +263,11 @@ class RPCServer:
         self.httpd.server_close()
         # Leaving a token on disk after the node exits invites a client to
         # believe it is still valid. It is not — a restart mints a new one.
-        if self.datadir is not None:
-            (self.datadir / COOKIE_FILENAME).unlink(missing_ok=True)
+        # Only ever remove our own network's file: another network's node may
+        # be running from this same data directory right now.
+        path = self.cookie_path
+        if path is not None:
+            path.unlink(missing_ok=True)
 
     # -------------------------------------------------------------- dispatch
 

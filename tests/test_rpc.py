@@ -231,20 +231,22 @@ def test_a_browser_simple_request_content_type_is_refused(stack):
 
 
 def test_the_cookie_file_is_written_and_matches_the_server(tmp_path):
-    from obsidion.rpc import COOKIE_FILENAME, read_cookie
+    from obsidion.rpc import cookie_filename, read_cookie
 
     wallet = Wallet.create(tmp_path / "c.wallet", "pw", REGTEST)
     node = ObsidionNode(REGTEST, wallet=wallet)
     rpc = RPCServer(node, datadir=tmp_path)
     try:
-        assert read_cookie(tmp_path) == rpc.token
+        assert read_cookie(tmp_path, "regtest") == rpc.token
         assert len(rpc.token) == 64
+        # Named for its network, so a node on another chain cannot overwrite it.
+        assert (tmp_path / cookie_filename("regtest")).exists()
     finally:
         rpc.stop()
         node.stop()
 
     # Stopping removes it, so nothing stale is left implying it still works.
-    assert not (tmp_path / COOKIE_FILENAME).exists()
+    assert not (tmp_path / cookie_filename("regtest")).exists()
 
 
 def test_two_nodes_get_different_tokens(tmp_path):
@@ -308,3 +310,56 @@ def test_the_halving_countdown_moves_with_the_chain(stack):
     after = result(rpc, "getinfo")["halving"]
     assert after["era"] == 1
     assert after["next_halving_height"] == 20
+
+
+def test_two_networks_sharing_a_datadir_do_not_clobber_each_others_token(tmp_path):
+    """Networks share a data directory by default; their tokens must not.
+
+    Real incident: a regtest node started with the default datadir overwrote
+    the running mainnet node's .rpccookie. The mainnet node kept running and
+    relaying perfectly while every client - CLI, explorer, HUD - was locked out
+    with a 401, which reads as a broken node rather than a clobbered file. The
+    chain databases were already namespaced (mainnet-chain.db); the cookie was
+    not.
+    """
+    from obsidion.node import ObsidionNode
+    from obsidion.params import MAINNET, REGTEST
+    from obsidion.rpc import RPCServer, read_cookie
+
+    main_node = ObsidionNode(MAINNET)
+    regtest_node = ObsidionNode(REGTEST)
+    main_rpc = RPCServer(main_node, datadir=tmp_path)
+    regtest_rpc = RPCServer(regtest_node, datadir=tmp_path)
+    try:
+        assert main_rpc.token != regtest_rpc.token
+
+        # Each client reads its own network's token, not whoever wrote last.
+        assert read_cookie(tmp_path, "mainnet") == main_rpc.token
+        assert read_cookie(tmp_path, "regtest") == regtest_rpc.token
+
+        # Stopping one must not disarm the other.
+        regtest_rpc.stop()
+        assert read_cookie(tmp_path, "mainnet") == main_rpc.token
+    finally:
+        main_rpc.stop()
+        main_node.chain.close()
+        regtest_node.chain.close()
+
+
+def test_a_client_falls_back_to_a_legacy_shared_cookie(tmp_path):
+    """A client pointed at a node from before the split must still work."""
+    from obsidion.rpc import COOKIE_FILENAME, read_cookie
+
+    (tmp_path / COOKIE_FILENAME).write_text("legacy-token")
+    assert read_cookie(tmp_path, "mainnet") == "legacy-token"
+
+    # But a network-specific file wins when both exist.
+    (tmp_path / ".rpccookie-mainnet").write_text("current-token")
+    assert read_cookie(tmp_path, "mainnet") == "current-token"
+
+
+def test_a_missing_cookie_still_raises_file_not_found(tmp_path):
+    from obsidion.rpc import read_cookie
+
+    with pytest.raises(FileNotFoundError):
+        read_cookie(tmp_path, "mainnet")

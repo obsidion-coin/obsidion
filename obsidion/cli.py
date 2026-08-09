@@ -20,7 +20,7 @@ import urllib.request
 from pathlib import Path
 
 from obsidion.params import get_network
-from obsidion.rpc import COOKIE_FILENAME, read_cookie
+from obsidion.rpc import cookie_filename, read_cookie
 
 COMMANDS = {
     "getinfo": "node status, supply, and the halving countdown",
@@ -39,14 +39,16 @@ COMMANDS = {
 }
 
 
-def rpc_call(port: int, method: str, params: list, datadir: str) -> object:
+def rpc_call(
+    port: int, method: str, params: list, datadir: str, network: str | None = None
+) -> object:
     try:
-        token = read_cookie(datadir)
+        token = read_cookie(datadir, network)
     except FileNotFoundError:
         raise SystemExit(
             f"no RPC token found in {datadir}. A running node writes one to "
-            f"{COOKIE_FILENAME} on start-up — check obsidion-node is running "
-            "and that --datadir matches the one it was given."
+            f"{cookie_filename(network)} on start-up — check obsidion-node is "
+            "running and that --datadir matches the one it was given."
         ) from None
 
     request = json.dumps(
@@ -115,7 +117,11 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     result = rpc_call(
-        port, args.command, [_coerce(a) for a in args.args], args.datadir
+        port,
+        args.command,
+        [_coerce(a) for a in args.args],
+        args.datadir,
+        args.network,
     )
     json.dump(result, sys.stdout, indent=2)
     print()

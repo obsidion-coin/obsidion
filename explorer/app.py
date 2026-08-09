@@ -355,7 +355,7 @@ def main(argv: list[str] | None = None) -> None:
         else get_network(args.network).default_rpc_port
     )
     try:
-        token = read_cookie(args.datadir)
+        token = read_cookie(args.datadir, args.network)
     except FileNotFoundError:
         raise SystemExit(
             f"no RPC token in {args.datadir} — start obsidion-node first, and "
