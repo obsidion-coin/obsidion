@@ -4,35 +4,39 @@ Written plainly on purpose: the audience for a new proof-of-work coin has read
 a thousand posts promising revolution, and the ones they take seriously are
 the ones that sound like software instead of a pitch.
 
-**Post this before mining starts, and state the gap honestly.** The waiting
-period is what makes the launch fair — 24 hours is the ideal, because it lets
-people in every timezone install and be ready at block one. This launch ran a
-shorter window, and says so below rather than implying otherwise. What ruins a
-launch is not a short window; it is a stated window that the block timestamps
-contradict. Those timestamps are permanent and public, and someone always
-checks.
+**What makes a launch fair is not the size of the head start — it is that the
+head start is disclosed and verifiable, not hidden.** The ideal is to announce
+first and wait 24 hours so everyone can be ready at block one. This launch did
+not do that: mining began before this post, and rather than dress that up, the
+exact facts are below and every one of them is checkable on the chain itself.
+What ruins a launch is a claim the block timestamps contradict. So here are the
+timestamps.
 
 ---
 
-## Obsidion (OBSD) — a CPU-mineable proof-of-work coin, launching 2026-08-09 03:00 UTC
+## Obsidion (OBSD) — a CPU-mineable proof-of-work coin, live since 2026-08-09 03:35 UTC
 
 No premine. No presale. No dev fund. No ICO. Every OBSD that will ever exist
-has to be mined, starting at the time above, and I mine on the same terms as
-everyone else.
+has to be mined, and I mine on the same terms as everyone else — the only
+difference is the minutes between block one and this post, quantified below.
 
-**Full disclosure on timing.** This is going up roughly two hours before
-mining starts, not the 24 hours I would have preferred. The chain is at height
-0 as I post this — nothing has been mined, and the genesis block's 50 OBSD is
-locked to an unspendable hash of twenty zero bytes. Verify both claims
-yourself: sync from the seed and check the height, and check block one's
-timestamp against this post. If you find a block dated before 03:00 UTC on
-2026-08-09, I lied and you should say so loudly.
+**Full disclosure on timing.** Mining began at **2026-08-09 03:35:32 UTC** —
+block 1 is `a470dffe41a4c3ac9101ee695205aac1e899f4b14fbbf6da565b52e8b5438873`,
+built on the genesis block published days earlier. This announcement goes up in
+the minutes after that, not before, and I am not going to pretend otherwise.
+There is no premine: the genesis reward of 50 OBSD is locked to an unspendable
+hash of twenty zero bytes and can never move; every other coin was mined block
+by block starting at the time above. Verify it yourself — sync from the seed
+and read block 1's timestamp. If it predates 03:35:32 UTC on 2026-08-09, say so
+loudly.
 
-For what it is worth, a head start is worth much less here than it looks.
-Difficulty retargets every 120 blocks and clamps at 4x, so a single CPU
-mining alone throttles itself fast: two hours of solo mining is about 164
-blocks, roughly 0.04% of the total supply. That is the arithmetic, not an
-excuse — the window is short and I would rather you hear it from me.
+The head start this represents is small and self-limiting. Difficulty starts at
+the network floor and retargets every 120 blocks, clamped 4× per period, so a
+lone CPU cannot run away with it: by the time you read this the chain will be a
+few dozen blocks in, a fraction of a percent of the 21 million cap. Don't take
+my word for the number — `getinfo` reports the current height and circulating
+supply, and you can watch it against the cap in the explorer. I would rather
+hand you the arithmetic than have you find it.
 
 *Obsidi**o**n, with an "o" — named for the volcanic glass. Not the note-taking
 app, and not the unrelated coin trading as ODN. Getting that out of the way
@@ -103,7 +107,7 @@ against your own node; there is no hosted one yet.
   from nothing is an interesting thing to be part of.
 
 Code: https://github.com/obsidion-coin/obsidion
-Tests: 360, run on every commit across Linux, macOS and Windows.
+Tests: 391, run on every commit across Linux, macOS and Windows.
 
 ---
 
@@ -125,13 +129,15 @@ People will ask, and having no answer reads as evasion:
   inherits code you cannot vouch for.
 - *What's your premine?* — Nothing. Point at the genesis block: its 50 OBSD is
   locked to an unspendable hash of twenty zero bytes.
-- *How do I know you didn't mine early?* — This post predates block one, and
-  every block timestamp is public. Check block one against the time on this
-  post. Do not take my word for it; the whole point of a chain is that you
-  do not have to.
-- *Two hours is not 24 hours.* — Correct, and it is stated up front rather
-  than glossed. Judge the gap on the evidence: height 0 at posting time, and
-  block one's timestamp afterwards.
+- *How do I know how much you mined before announcing?* — Read it off the
+  chain. Block 1 is timestamped 2026-08-09 03:35:32 UTC; this post went up
+  minutes later; `getinfo` shows the height and circulating supply right now.
+  The gap is disclosed, small, and self-limiting under the difficulty clamp —
+  and none of it depends on trusting me, which is the whole point of a chain.
+- *You mined before announcing.* — Yes, by a matter of minutes, and it says so
+  up front rather than being buried. A concealed head start is a stealth
+  premine; a disclosed and verifiable one is just the first blocks. Judge it on
+  the timestamps, which are permanent.
 - *Only one seed node?* — Yes, today, and it is the network's weakest point:
   if it goes offline, existing nodes carry on but newcomers cannot find their
   way in. More seeds are the most useful thing anyone can contribute. Seeds
