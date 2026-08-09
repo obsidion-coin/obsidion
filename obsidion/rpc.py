@@ -484,7 +484,7 @@ class RPCServer:
     def rpc_getaddressutxos(self, address: str) -> dict:
         """Every unspent output owned by an address — any address, not just the
         wallet's. This is what makes the explorer able to answer 'how much does
-        obsd1q… hold?'."""
+        obsd1… hold?'."""
         try:
             pubkey_hash = crypto.address_to_pubkey_hash(
                 address, self.node.params.bech32_hrp

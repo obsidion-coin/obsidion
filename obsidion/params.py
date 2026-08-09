@@ -42,7 +42,14 @@ class NetworkParams:
     # Identity
     name: str
     bech32_hrp: str
-    """Human-readable part of addresses, e.g. 'obsd' gives 'obsd1q...'."""
+    """Human-readable part of addresses, e.g. 'obsd' gives 'obsd1...'.
+
+    Only the prefix and the '1' separator are fixed. What follows encodes the
+    public key hash itself, so the first character after the '1' varies across
+    the whole bech32 alphabet - there is no constant second character to look
+    for. (Bitcoin's addresses show a fixed 'q' there because they encode a
+    witness version byte first; Obsidion has no script versioning to encode.)
+    """
 
     magic: bytes
     """4-byte prefix on every P2P message. Isolates this network from all others."""

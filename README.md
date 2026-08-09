@@ -26,7 +26,7 @@ rather than promised.
 | Block identity | SHA-256d, kept cheap and separate from the mining hash |
 | Difficulty | retargets every 120 blocks (~5 h), clamped to 4× per period |
 | Ledger | UTXO model, pay-to-pubkey-hash, ECDSA/secp256k1 |
-| Addresses | bech32: `obsd1q…` (mainnet), `tobsd1q…` (testnet) |
+| Addresses | bech32: `obsd1…` (mainnet), `tobsd1…` (testnet) |
 | Genesis (mainnet) | `69e33674de2c169233dbbdca69dcd1ede122207cd7ead83c5564e08172862a7a` |
 
 Half of all OBSD that will ever exist mints in the first era. The cap lands at
@@ -69,7 +69,7 @@ Then, in a second terminal:
 ```
 .venv\Scripts\python -m obsidion.cli --network regtest getinfo
 .venv\Scripts\python -m obsidion.cli --network regtest getbalance
-.venv\Scripts\python -m obsidion.cli --network regtest send rtobsd1q... 12.5
+.venv\Scripts\python -m obsidion.cli --network regtest send rtobsd1... 12.5
 ```
 
 And watch it live in a browser:

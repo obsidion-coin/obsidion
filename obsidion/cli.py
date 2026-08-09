@@ -5,7 +5,7 @@ JSON the node returned. The node is the source of truth; this is a phone.
 
     obsidion-cli --network regtest getinfo
     obsidion-cli --network regtest getnewaddress
-    obsidion-cli --network regtest send rtobsd1q… 12.5
+    obsidion-cli --network regtest send rtobsd1… 12.5
     obsidion-cli --network regtest generate 10
     obsidion-cli --network regtest startmining
 """
