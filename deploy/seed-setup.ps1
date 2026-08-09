@@ -173,7 +173,19 @@ if ($DuckDnsDomain -and $DuckDnsToken) {
     # this connection's public IP as seen from outside - exactly what a peer
     # would resolve.
     $updateUrl = "https://www.duckdns.org/update?domains=$DuckDnsDomain&token=$DuckDnsToken&ip="
-    $response = (Invoke-WebRequest -Uri $updateUrl -UseBasicParsing).Content.Trim()
+
+    # TLS 1.2 for the same reason as the zip download above: older Windows
+    # builds still default to TLS 1.0, which DuckDNS refuses.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    # -UseBasicParsing hands back .Content as a Byte[] whenever the response
+    # content-type is not one it recognises as text, and DuckDNS's plain "OK"
+    # lands in exactly that case. Calling .Trim() on it fails with a
+    # MethodNotFound on [System.Byte]. Decode first, and accept either shape
+    # so this keeps working if the header ever changes.
+    $raw = (Invoke-WebRequest -Uri $updateUrl -UseBasicParsing).Content
+    if ($raw -is [byte[]]) { $raw = [System.Text.Encoding]::ASCII.GetString($raw) }
+    $response = ([string]$raw).Trim()
     if ($response -ne "OK") {
         throw "DuckDNS rejected the update (returned '$response'). Check the domain and token."
     }
