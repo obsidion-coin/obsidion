@@ -36,7 +36,7 @@ from obsidion.chainstate import ChainState
 from obsidion.genesis import genesis_hash
 from obsidion.mempool import Mempool
 from obsidion.miner import Miner
-from obsidion.p2p import P2PNode
+from obsidion.p2p import P2PNode, parse_address
 from obsidion.params import COIN_NAME, NetworkParams, TICKER, get_network
 from obsidion.transaction import Transaction
 from obsidion.wallet import Wallet, WalletError
@@ -276,11 +276,10 @@ def main(argv: list[str] | None = None) -> None:
     specs = args.connect or list(params.seed_nodes)
     seeds = []
     for spec in specs:
-        host, _, port = spec.rpartition(":")
         try:
-            seeds.append((host, int(port)))
-        except ValueError:
-            raise SystemExit(f"malformed peer address {spec!r}; expected host:port")
+            seeds.append(parse_address(spec))
+        except ValueError as exc:
+            raise SystemExit(str(exc))
 
     node = ObsidionNode(
         params,

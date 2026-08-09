@@ -293,3 +293,63 @@ def test_an_untouched_wallet_still_loads(tmp_path):
     reloaded = Wallet.load(path, "pw")
     assert reloaded.addresses() == original.addresses()
     assert reloaded.params.name == "regtest"
+
+
+def test_configured_seeds_are_parsed_into_host_and_port():
+    """Seeds are written as "host:port" strings but dialled as pairs.
+
+    Shipped broken: P2PNode stored params.seed_nodes verbatim while annotating
+    it list[tuple[str, int]], so self.seeds held strings. Nothing noticed until
+    _top_up_outbound reached `for host, port in candidates`, which tore a
+    hostname apart character by character and raised ValueError.
+
+    It survived the suite because every network used in tests declares no
+    seeds, and the integration tests hand their seeds in as tuples already -
+    so the one line that converts them was never executed by a test.
+    """
+    from dataclasses import replace
+
+    from obsidion.p2p import parse_address
+
+    params = replace(
+        REGTEST, seed_nodes=("seed.example.org:9444", "198.51.100.7:19444")
+    )
+    chain = ChainState(params)
+    node = P2PNode(chain, Mempool(params), params)
+
+    assert node.seeds == [("seed.example.org", 9444), ("198.51.100.7", 19444)]
+    assert all(isinstance(port, int) for _, port in node.seeds)
+
+    # The failure was in unpacking, so assert the shape the caller relies on.
+    for host, port in node.seeds:
+        assert isinstance(host, str) and isinstance(port, int)
+
+    # Hostnames contain no colon; addresses do. Both must split on the last one.
+    assert parse_address("example.org:1") == ("example.org", 1)
+    assert parse_address("::1:9444") == ("::1", 9444)
+    for bad in ("no-port", "host:", ":9444", "host:port"):
+        with pytest.raises(ValueError):
+            parse_address(bad)
+
+
+def test_topping_up_peers_falls_back_to_seeds_without_crashing():
+    """The bug only fired once the address book ran dry - i.e. on a new node.
+
+    A first-time user has no peers and no addresses, which is exactly the state
+    that reaches the seed fallback. So the one code path that mattered for
+    bootstrapping was the one that raised.
+    """
+    from dataclasses import replace
+
+    params = replace(REGTEST, seed_nodes=("127.0.0.1:1:",))
+    with pytest.raises(ValueError):
+        P2PNode(ChainState(params), Mempool(params), params)
+
+    params = replace(REGTEST, seed_nodes=("127.0.0.1:9",))
+    node = P2PNode(ChainState(params), Mempool(params), params)
+    assert not node.addrbook, "the premise is an empty address book"
+
+    # Nothing is listening on port 9; connect() must fail, not explode. The
+    # original defect raised before a single connection was attempted.
+    asyncio.run(node._top_up_outbound())
+    assert node.seeds == [("127.0.0.1", 9)]

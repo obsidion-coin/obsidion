@@ -273,6 +273,20 @@ class Peer:
         return f"<peer {self.host} {direction} height={self.height}>"
 
 
+def parse_address(spec: str) -> tuple[str, int]:
+    """Split a "host:port" string into its parts.
+
+    Partitions on the *last* colon, so hostnames and IPv6 literals both
+    survive. Seeds are configured as strings because that is what a human
+    writes, but everything downstream dials a (host, port) pair - so the
+    conversion has to happen exactly once, here, rather than being assumed.
+    """
+    host, _, port = spec.rpartition(":")
+    if not host or not port.isdigit():
+        raise ValueError(f"malformed peer address {spec!r}; expected host:port")
+    return host, int(port)
+
+
 class P2PNode:
     """The networking half of an Obsidion node.
 
@@ -302,7 +316,14 @@ class P2PNode:
         self.addrbook: set[tuple[str, int]] = set()
         self.banned: set[str] = set()
         self.server: asyncio.Server | None = None
-        self.seeds: list[tuple[str, int]] = list(params.seed_nodes)
+        # params.seed_nodes holds "host:port" strings; the rest of this class
+        # dials (host, port) pairs. Convert here, or _top_up_outbound tears a
+        # string apart character by character and dies on the unpack - which
+        # only ever happens once the address book runs dry, i.e. precisely when
+        # a brand-new node is trying to find the network.
+        self.seeds: list[tuple[str, int]] = [
+            parse_address(spec) for spec in params.seed_nodes
+        ]
         #: Addresses dialled and found unreachable. Retried, but only after
         #: everything else has been tried.
         self.failed: set[tuple[str, int]] = set()
