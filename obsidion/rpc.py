@@ -152,8 +152,8 @@ class RPCServer:
         self.node = node
         self.datadir = Path(datadir) if datadir is not None else None
         #: Fresh every start, so a leaked or stale cookie stops working.
+        #: Deliberately NOT published here — see start().
         self.token = secrets.token_hex(32)
-        self._write_cookie()
 
         methods = self  # for the handler closure
 
@@ -251,6 +251,15 @@ class RPCServer:
             target=self.httpd.serve_forever, name="obsidion-rpc", daemon=True
         )
         self._thread.start()
+        # Publish the token only now, with the socket bound and a thread
+        # serving it. A cookie on disk is read by every client as "a node is
+        # answering, here is how to talk to it", so writing one before that is
+        # true is actively harmful: a node that then fails to finish starting —
+        # a port already taken, most often — has already overwritten the token
+        # of the node that IS running. The survivor keeps serving perfectly
+        # while every client is locked out with a 401, and the only cure is
+        # restarting the innocent node, because its token lives in memory.
+        self._write_cookie()
 
     def stop(self) -> None:
         # shutdown() waits for serve_forever() to return, so calling it on a

@@ -236,6 +236,7 @@ def test_the_cookie_file_is_written_and_matches_the_server(tmp_path):
     wallet = Wallet.create(tmp_path / "c.wallet", "pw", REGTEST)
     node = ObsidionNode(REGTEST, wallet=wallet)
     rpc = RPCServer(node, datadir=tmp_path)
+    rpc.start()  # the token is published on start, not construction
     try:
         assert read_cookie(tmp_path, "regtest") == rpc.token
         assert len(rpc.token) == 64
@@ -330,6 +331,8 @@ def test_two_networks_sharing_a_datadir_do_not_clobber_each_others_token(tmp_pat
     regtest_node = ObsidionNode(REGTEST)
     main_rpc = RPCServer(main_node, datadir=tmp_path)
     regtest_rpc = RPCServer(regtest_node, datadir=tmp_path)
+    main_rpc.start()
+    regtest_rpc.start()
     try:
         assert main_rpc.token != regtest_rpc.token
 
@@ -363,3 +366,39 @@ def test_a_missing_cookie_still_raises_file_not_found(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         read_cookie(tmp_path, "mainnet")
+
+
+def test_a_node_that_never_starts_does_not_clobber_a_running_ones_token(tmp_path):
+    """A cookie on disk must mean "a node is answering", not "one tried".
+
+    RPCServer used to write its token in __init__, before binding. So a node
+    that failed to finish starting - almost always a port already in use - had
+    already overwritten the token of the node that was running. The survivor
+    kept serving while every client got 401s, and the only cure was restarting
+    the innocent node, because its token exists only in memory.
+
+    Observed live: a launcher double-click wrote a fresh cookie, then died
+    binding the P2P port, locking the CLI and HUD out of a perfectly healthy
+    node.
+    """
+    from obsidion.rpc import RPCServer, read_cookie
+
+    live_node = ObsidionNode(REGTEST)
+    doomed_node = ObsidionNode(REGTEST)
+    live = RPCServer(live_node, datadir=tmp_path)
+    live.start()
+    try:
+        assert read_cookie(tmp_path, "regtest") == live.token
+
+        # A second server for the same network that is constructed but never
+        # started - exactly what a node aborting during start-up leaves behind.
+        doomed = RPCServer(doomed_node, datadir=tmp_path)
+        assert doomed.token != live.token
+
+        assert read_cookie(tmp_path, "regtest") == live.token, (
+            "a node that never started overwrote the running node's token"
+        )
+    finally:
+        live.stop()
+        live_node.chain.close()
+        doomed_node.chain.close()
