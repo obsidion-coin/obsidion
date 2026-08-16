@@ -63,17 +63,42 @@ def format_amount(shards: int) -> str:
     return str(Decimal(shards) / COIN)
 
 
-def parse_amount(value) -> int:
-    """Decimal OBSD string → integer shards, refusing anything inexact."""
+def to_shards(value) -> int:
+    """Decimal OBSD string → integer shards. Conversion only, no policy.
+
+    The faithful inverse of `format_amount`, and the single place that
+    conversion happens. It matters that it goes through `Decimal`: format_amount
+    emits *scientific notation* for small values — four shards serialise as
+    "4E-8", not "0.00000004" — so anything that splits on the decimal point
+    silently reads the wrong number. Money bugs live in exactly that gap, which
+    is why there is one implementation rather than one per caller.
+
+    Raises ValueError on anything unparseable or finer than a shard. Whether an
+    amount is one you should *accept* is a separate question; see
+    `parse_amount`.
+    """
     try:
         shards = Decimal(str(value)) * COIN
     except InvalidOperation:
-        raise RPCError(-3, f"unparseable amount: {value!r}") from None
+        raise ValueError(f"unparseable amount: {value!r}") from None
     if shards != int(shards):
-        raise RPCError(-3, f"amount {value!r} is finer than one shard")
+        raise ValueError(f"amount {value!r} is finer than one shard")
+    return int(shards)
+
+
+def parse_amount(value) -> int:
+    """Decimal OBSD string → integer shards, refusing anything unspendable.
+
+    `to_shards` plus the policy the RPC's send path needs: an amount must be
+    positive to be worth sending.
+    """
+    try:
+        shards = to_shards(value)
+    except ValueError as exc:
+        raise RPCError(-3, str(exc)) from None
     if shards <= 0:
         raise RPCError(-3, "amount must be positive")
-    return int(shards)
+    return shards
 
 
 COOKIE_FILENAME = ".rpccookie"

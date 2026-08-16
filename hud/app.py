@@ -27,7 +27,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template_string, request, send_file
 
 from obsidion.params import COIN, COIN_NAME, TICKER, get_network
-from obsidion.rpc import _is_loopback, read_cookie
+from obsidion.rpc import _is_loopback, read_cookie, to_shards
 from obsidion.rpcclient import RPCClientError, rpc
 
 
@@ -236,17 +236,13 @@ def mining_kpis(
 def _shards(decimal_string: str) -> int:
     """Turn a decimal-string amount back into integer shards, exactly.
 
-    Amounts cross RPC as strings so money never rides on a float. They are
-    produced by ``rpc.format_amount`` as ``str(Decimal(shards) / COIN)``, which
-    emits *scientific notation* for small values — 4 shards serialises as
-    "4E-8", not "0.00000004". So this must parse with Decimal (the faithful
-    inverse), never by splitting on the decimal point, which silently mangles
-    the exponent form. Multiplying a Decimal by COIN and taking int() recovers
-    the shard count with no rounding.
+    Delegates to the node's own converter rather than repeating it. This used
+    to be a second implementation, and the reason it exists as a named function
+    at all is the bug it once had: amounts cross RPC as strings, and
+    `format_amount` emits scientific notation for small values ("4E-8"), which
+    a decimal-point split reads as the wrong number entirely.
     """
-    from decimal import Decimal
-
-    return int(Decimal(decimal_string) * COIN)
+    return to_shards(decimal_string)
 
 
 # --------------------------------------------------------------------------
