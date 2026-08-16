@@ -53,7 +53,7 @@ nothing exposed).
 - A young PoW chain with little hashpower is 51%-attackable. True here, true of
   every new chain.
 - No professional audit yet. One adversarial review found and fixed two
-  coin-counterfeiting bugs, both regression-tested; 391 tests run on CI across
+  coin-counterfeiting bugs, both regression-tested; 450 tests run on CI across
   Linux/macOS/Windows.
 - Pure-Python signature verification caps throughput to a few hundred tx/s per core.
 - I am not selling anything and make no value claim. Scarcity is not value.
@@ -70,29 +70,26 @@ Code: https://github.com/obsidion-coin/obsidion
 
 **Text:**
 
-I wanted to actually understand how a cryptocurrency works end to end, so
-instead of reading about it I built one from first principles in Python: UTXO
-ledger, secp256k1 signatures, Merkle trees, a scrypt proof-of-work, P2P gossip
-with fork choice by most-cumulative-work, atomic reorgs, an encrypted wallet,
-JSON-RPC, and a block explorer. ~8,500 lines, 391 tests on CI (Linux/macOS/Windows).
+I wanted to understand how a cryptocurrency actually works, so I built one from
+first principles in Python: UTXO ledger, secp256k1, Merkle trees, scrypt PoW,
+P2P gossip with most-work fork choice, atomic reorgs, encrypted wallet, RPC,
+block explorer. ~8,500 lines, 450 tests on CI.
 
-Things I found interesting building it:
+Two things surprised me.
 
-- An adversarial review of code that already passed 306 tests still found two
-  ways to counterfeit coins — a reorg that resurrected an output spent within
-  the same block, and a corrupted-signature cache-poisoning fork (txids exclude
-  signatures for malleability, so the block hash doesn't commit to them either).
-  Both fixed with regression tests. Passing tests is not correctness.
-- scrypt with a 2 MB working set narrows the ASIC edge from ~10^8 to ~10, so
-  it's genuinely CPU-mineable (~160 H/s on a laptop core) instead of owned by
-  whoever buys one machine.
-- Keeping consensus code pure — no clocks, no I/O, no randomness — means two
-  nodes given the same inputs cannot disagree, which makes the whole thing
-  testable in a way I didn't expect.
+**Passing tests is not correctness.** An adversarial review of code already
+passing 306 tests found two ways to counterfeit coins: a reorg that resurrected
+an output spent within the same block, and a cache-poisoning fork via a
+corrupted signature (txids exclude signatures to prevent malleability — so the
+block hash doesn't commit to them either). Both fixed, both regression-tested.
 
-It's running as a real network now, launched fair (no premine; mining began
-2026-08-09 03:35 UTC, disclosed and verifiable on-chain). But honestly the
-interesting part is the code, not the coin — and I'll be the first to say a
-young PoW chain is 51%-attackable and this hasn't had a professional audit.
-Limitations are in the README, not buried. Happy to answer anything about the
-design.
+**Memory is the thing silicon can't cheat.** scrypt with a 2 MB working set cuts
+the ASIC advantage from ~10^8 to ~10, which is the difference between a chain
+anyone can mine and one owned by whoever buys the first machine. A laptop core
+does ~160 H/s and genuinely competes.
+
+It's live as a real network — no premine, mining began 2026-08-09 03:35 UTC,
+disclosed and checkable on-chain. But the code is the interesting part, not the
+coin: a young PoW chain is 51%-attackable and this has had no professional
+audit. Both are in the README rather than buried. Happy to go into any of the
+design decisions.
