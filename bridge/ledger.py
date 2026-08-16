@@ -40,6 +40,16 @@ class State(str, Enum):
     PENDING = "pending"
     #: Confirmed deep enough to act on, but the action has not completed.
     READY = "ready"
+    #: Handed to the other chain, outcome not yet known.
+    #:
+    #: This state exists because a mint spans two systems that cannot be made
+    #: atomic. Crash after minting but before recording, and a restart would
+    #: mint again; record first and crash before minting, and the deposit is
+    #: credited with nothing behind it. Neither ordering is safe on its own, so
+    #: the intent is written down *before* acting, and anything found in this
+    #: state on start-up is a question to be answered against the other chain
+    #: rather than an assumption to be made.
+    IN_FLIGHT = "in_flight"
     #: The other chain has been told. Never acted on again.
     DONE = "done"
     #: Disappeared in a reorg before it was acted on. Terminal, and harmless.
@@ -254,23 +264,54 @@ class BridgeLedger:
                 "UPDATE events SET state = ? WHERE key = ?", (State.READY.value, key)
             )
 
+    def mark_in_flight(self, key: str) -> None:
+        """Declare the intent to act, before acting.
+
+        Written first so that a crash between here and the other chain leaves
+        evidence. Without it, an interrupted mint is indistinguishable from one
+        that never started — and guessing wrong in either direction either
+        mints twice or strands a deposit.
+        """
+        with self._lock, self.db:
+            self._require_state(key, {State.READY, State.IN_FLIGHT})
+            self.db.execute(
+                "UPDATE events SET state = ? WHERE key = ?",
+                (State.IN_FLIGHT.value, key),
+            )
+
     def mark_done(self, key: str, receipt: str) -> None:
         """Record that the other chain has been told, with proof.
 
-        Write this *before* believing the job is finished, and only from a
-        caller that has a receipt in hand — a mint signature, a released txid.
-        A DONE row with no receipt is indistinguishable from a lie.
+        Only from a caller holding a receipt — a mint signature, a released
+        txid. A DONE row with no receipt is indistinguishable from a lie, and
+        it is the row a future operator reconciles custody against.
         """
         if not receipt:
             raise ValueError("refusing to mark done without a receipt")
         with self._lock, self.db:
-            state = self._require_state(key, {State.READY, State.DONE})
+            state = self._require_state(
+                key, {State.READY, State.IN_FLIGHT, State.DONE}
+            )
             if state is State.DONE:
                 return  # already finished; re-running must be harmless
             self.db.execute(
                 "UPDATE events SET state = ?, receipt = ? WHERE key = ?",
                 (State.DONE.value, receipt, key),
             )
+
+    def in_flight(self, kind: str) -> list[tuple[str, int, dict]]:
+        """Events handed to the other chain whose outcome is unknown.
+
+        On start-up this is the list that must be resolved against the other
+        chain before anything else is minted. Acting on new work while an
+        unresolved mint sits here risks doubling it.
+        """
+        rows = self.db.execute(
+            "SELECT key, amount, payload FROM events "
+            "WHERE kind = ? AND state = ? ORDER BY rowid",
+            (kind, State.IN_FLIGHT.value),
+        ).fetchall()
+        return [(key, amount, json.loads(payload)) for key, amount, payload in rows]
 
     def abandon(self, key: str, reason: str) -> None:
         """A deposit that vanished in a reorg before it was acted on.
@@ -285,6 +326,14 @@ class BridgeLedger:
                 raise ValueError(
                     f"{key} was already acted on; abandoning it now would leave "
                     "wrapped tokens with nothing behind them"
+                )
+            if state is State.IN_FLIGHT:
+                # It may or may not have been minted. Deciding either way from
+                # here is a guess, and one of the two guesses creates unbacked
+                # tokens. Resolve it against the other chain first.
+                raise ValueError(
+                    f"{key} is in flight and may already have been minted; "
+                    "resolve it against Solana before abandoning it"
                 )
             if state is None:
                 return

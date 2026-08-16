@@ -121,7 +121,9 @@ the chain; still holds nothing.
 
 **Stage 3 — the Solana side.** An SPL token whose mint authority the bridge
 holds; mint on confirmed deposit. Needs a funded Solana keypair, so it needs
-real money and is the first stage that can lose any.
+real money and is the first stage that can lose any. *The service and its
+crash-recovery protocol exist now (`bridge/minting.py`); the cluster client and
+the keys do not — see below.*
 
 **Stage 4 — unwrapping.** Watch for burns, release from custody. This is the
 stage that spends user funds and deserves the most review.
@@ -132,6 +134,49 @@ visible on DEXScreener. Real capital, entirely the operator's decision.
 Stages 1 and 2 are safe to build and useful on their own. Stage 3 onward
 involves custody, keys and money, and none of it should be rushed to reach a
 listing sooner.
+
+## Why a mint carries a memo
+
+A mint touches two systems that cannot be made atomic. Write the ledger first
+and crash, and a deposit is marked minted with nothing behind it; mint first and
+crash, and the restart mints again and invents wrapped tokens. No ordering
+fixes this, because the process can die between any two instructions.
+
+So every mint carries the deposit's own key as a Solana memo
+(`obsd-bridge:<txid>:<index>`). After a crash, "did I already mint for this
+deposit?" is a **query**, not a guess:
+
+- in flight, and a mint with that memo exists → record it done with that
+  signature;
+- in flight, and no such mint → nothing landed; safe to retry.
+
+Two rules follow, and both are tested by making a fake cluster crash on cue:
+
+- **A failed lookup is not a "no".** If Solana cannot be asked, the service
+  stops rather than assuming nothing was minted — that assumption is exactly
+  what mints twice.
+- **Unresolved work blocks everything.** While any deposit's outcome is
+  unknown, no other deposit is minted. A bridge that keeps working around an
+  unknown will eventually double it.
+
+## What is still missing before Stage 3 can run
+
+`bridge/minting.py` has the service and the recovery protocol, tested against a
+fake. It talks to Solana through a two-method interface (`SolanaMinter`), and
+**no implementation of that interface exists yet** — deliberately, because
+everything below is the operator's, involves real money, and cannot be done by
+someone else on your behalf:
+
+1. **A Solana keypair**, funded with SOL for fees.
+2. **An SPL token mint**, with its authority held by that keypair. Decimals
+   should be 8, matching a shard, so amounts convert without rounding.
+3. **A decision about that key.** Whoever holds it can print unbacked wOBSD. In
+   v1 that is one person, and the token description should say so plainly.
+4. **The client itself** — `solana-py`/`solders`, kept as an optional
+   dependency so the coin never requires it.
+
+Until those exist there is nothing to mint against, which is the correct order:
+the dangerous parts last, and separately.
 
 ## Deliberately out of scope for v1
 

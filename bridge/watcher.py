@@ -127,18 +127,26 @@ def reconcile(
 
     # Anything the ledger is holding that the chain no longer shows.
     for key, state in known.items():
-        if key in still_present or state in (State.ABANDONED, State.DONE):
+        if key in still_present:
             continue
-        actions.abandon.append((key, "no longer in the active chain"))
-
-    for key, state in known.items():
-        if state is State.DONE and key not in still_present:
+        if state in (State.PENDING, State.READY):
+            # Nothing was minted against it, so forgetting it costs nobody.
+            actions.abandon.append((key, "no longer in the active chain"))
+        elif state is State.DONE:
             # The wrapped tokens exist and the deposit backing them is gone.
             # The ledger refuses to abandon a DONE event for exactly this
             # reason; the operator has to look.
             actions.alerts.append(
                 f"{key} was minted but is no longer on-chain - wrapped tokens "
                 "may be unbacked. Stop minting and reconcile custody."
+            )
+        elif state is State.IN_FLIGHT:
+            # Worse than either: it vanished while a mint was outstanding, so
+            # we do not even know whether tokens exist for it. Guessing is how
+            # a bridge invents supply.
+            actions.alerts.append(
+                f"{key} vanished while its mint was in flight - check Solana "
+                "for that deposit's memo before doing anything else."
             )
 
     return actions
